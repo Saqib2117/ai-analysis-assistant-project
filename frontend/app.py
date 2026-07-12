@@ -1,6 +1,6 @@
 """
 AI Data Analysis Assistant - Premium UI
-Deploy on Streamlit Cloud
+Deployed Backend: https://saqib21-fastapi-backend.hf.space
 """
 
 import streamlit as st
@@ -165,8 +165,10 @@ st.markdown("""
 # SESSION STATE
 # ================================================================
 
+# --- UPDATED: Backend URL is now your deployed Hugging Face Space ---
 if 'api_url' not in st.session_state:
-    st.session_state.api_url = "http://localhost:10000"  # Render default port
+    st.session_state.api_url = "https://saqib21-fastapi-backend.hf.space"  # <--- DEPLOYED URL
+
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 if 'summary' not in st.session_state:
@@ -199,12 +201,14 @@ with st.sidebar:
     st.divider()
     
     # LLM Status
-    st.markdown("""
+    llm_status = "✅ Connected" if st.session_state.llm_available else "⚠️ LLM Not Configured"
+    llm_color = "#28a745" if st.session_state.llm_available else "#ffc107"
+    st.markdown(f"""
     <div style="background: #e8f4fd; padding: 0.8rem; border-radius: 10px; text-align: center;">
         <span style="font-size: 1.2rem;">🤖</span>
         <span style="font-weight: 600; color: #667eea;">DeepSeek AI</span>
         <br>
-        <span style="font-size: 0.8rem; color: #28a745;">✅ Connected</span>
+        <span style="font-size: 0.8rem; color: {llm_color};">{llm_status}</span>
     </div>
     """, unsafe_allow_html=True)
     
@@ -275,9 +279,9 @@ with st.sidebar:
     st.divider()
     
     # Backend Status
-    st.markdown("""
+    st.markdown(f"""
     <p style="font-size: 0.8rem; color: #6c757d; text-align: center;">
-        🔗 Backend: Render<br>
+        🔗 Backend: Hugging Face<br>
         ⚡ Status: <span style="color: #28a745;">● Online</span>
     </p>
     """, unsafe_allow_html=True)
