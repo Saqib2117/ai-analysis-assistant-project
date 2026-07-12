@@ -4,7 +4,7 @@ Data Analysis Engine for AI Data Analysis Assistant
 
 import pandas as pd
 import numpy as np
-from utils.helpers import get_dataset_summary  # <-- CHANGED: removed 'backend.'
+from backend.utils.helpers import get_dataset_summary  # ✅ FIXED
 
 class DataAnalyzer:
     """Main data analysis class"""

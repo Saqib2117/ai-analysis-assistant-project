@@ -19,6 +19,8 @@ from datetime import datetime
 import json
 import requests
 from dotenv import load_dotenv
+from analysis import DataAnalyzer
+from visualization import ChartGenerator
 
 # Load environment variables
 load_dotenv()
