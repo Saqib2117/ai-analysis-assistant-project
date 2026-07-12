@@ -361,6 +361,10 @@ else:
     # TAB 2: Q&A
     # ================================================================
     
+    # ================================================================
+# TAB 2: Q&A (FIXED - No error)
+# ================================================================
+
     with tab2:
         st.subheader("💬 Ask Questions About Your Data")
         
@@ -429,9 +433,9 @@ else:
                     st.session_state._temp_question = q
                     st.rerun()
         
+        # Process temp question - FIXED: Clear AFTER successful response
         if st.session_state._temp_question:
             question_text = st.session_state._temp_question
-            st.session_state._temp_question = ""
             
             with st.spinner("Analyzing..."):
                 try:
@@ -450,8 +454,13 @@ else:
                             'text': result.get('answer', 'No answer found'),
                             'explanation': result.get('explanation', '')
                         })
+                        st.session_state._temp_question = ""  # Clear after success
                         st.rerun()
+                    else:
+                        st.session_state._temp_question = ""  # Clear on error
+                        st.error(f"Error: {response.text}")
                 except Exception as e:
+                    st.session_state._temp_question = ""  # Clear on error
                     st.error(f"Error: {str(e)}")
     
     # ================================================================
