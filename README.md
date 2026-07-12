@@ -49,7 +49,7 @@ The **AI Data Analysis Assistant** is a full-stack web application that allows u
 ### Deployment
 | Platform | Purpose |
 |----------|---------|
-| **Render** | Backend hosting |
+| **Huggingface** | Backend hosting |
 | **Streamlit Cloud** | Frontend hosting |
 
 ---
