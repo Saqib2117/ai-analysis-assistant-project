@@ -282,49 +282,65 @@ async def explain_chart(request: ChartExplanationRequest = None):
         })
     
     try:
-        # Get chart type from request
         chart_type = "Auto"
-        if request and request.chart_type:
-            chart_type = request.chart_type
+        chart_data = None
         
-        # Get the actual data being displayed in the chart
+        if request:
+            chart_type = request.chart_type
+            if hasattr(request, 'chart_data'):
+                chart_data = request.chart_data
+        
         df = analyzer.df
+        summary = analyzer.get_summary()
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
         
-        # Get the actual chart data (what's being plotted)
-        chart_data = ""
-        if chart_type == "Bar" or chart_type == "Auto":
+        # --- AUTO-DETECT CHART DATA ---
+        chart_info = ""
+        
+        if chart_type == "Histogram" or chart_type == "Auto":
+            if numeric_cols:
+                # Get the first numeric column (usually the one used in chart)
+                col = numeric_cols[0]
+                stats = summary.get('numeric_stats', {}).get(col, {})
+                chart_info = f"""
+                This is a {chart_type} showing the distribution of '{col}'.
+                
+                KEY STATISTICS:
+                - Total Records: {len(df)}
+                - Min: {stats.get('min', 'N/A')}
+                - Max: {stats.get('max', 'N/A')}
+                - Mean: {stats.get('mean', 'N/A'):.2f}
+                - Median: {stats.get('median', 'N/A'):.2f}
+                - Standard Deviation: {stats.get('std', 'N/A'):.2f}
+                """
+        
+        elif chart_type == "Bar" or chart_type == "Pie":
             if categorical_cols and numeric_cols:
                 cat_col = categorical_cols[0]
                 num_col = numeric_cols[0]
                 top_5 = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False).head(5)
-                chart_data = f"Top 5 categories by {num_col}:\n"
+                
+                chart_info = f"""
+                This is a {chart_type} chart showing '{num_col}' by '{cat_col}'.
+                
+                TOP 5 CATEGORIES:
+                """
                 for cat, val in top_5.items():
-                    chart_data += f"- {cat}: {val:,.0f}\n"
-        elif chart_type == "Pie":
-            if categorical_cols:
-                cat_col = categorical_cols[0]
-                top_5 = df[cat_col].value_counts().head(5)
-                chart_data = f"Top 5 categories:\n"
-                for cat, count in top_5.items():
-                    pct = (count / len(df)) * 100
-                    chart_data += f"- {cat}: {count} ({pct:.1f}%)\n"
+                    chart_info += f"- {cat}: {val:,.0f}\n"
         
         prompt = f"""
-        You are a data analysis expert. Analyze the following chart and explain ONLY what this specific chart shows.
+        You are a data analysis expert. Analyze this chart and explain what it shows.
         
         CHART TYPE: {chart_type}
-        
-        CHART DATA:
-        {chart_data}
+        {chart_info}
         
         Please provide:
-        1. What this chart shows in simple terms (1 sentence)
+        1. What this chart shows in simple terms (1-2 sentences)
         2. The most prominent observation from this chart (1 sentence)
-        3. One key insight from this specific chart (1 sentence)
+        3. One key insight from this chart (1 sentence)
         
-        Keep it short, simple, and focused ONLY on this chart. Do NOT give general dataset insights.
+        Keep it short and focused ONLY on the chart.
         """
         
         llm_response = call_llm(prompt)
