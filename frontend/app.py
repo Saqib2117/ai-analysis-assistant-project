@@ -165,8 +165,11 @@ st.markdown("""
 # SESSION STATE
 # ================================================================
 
-if 'api_url' not in st.session_state:
-    st.session_state.api_url = "http://localhost:10000"  # Render default port
+BASE_URL = "https://saqib21-fastapi-backend.hf.space"
+
+if "api_url" not in st.session_state:
+    st.session_state.api_url = BASE_URL
+
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 if 'summary' not in st.session_state:
@@ -304,16 +307,22 @@ if not st.session_state.data_loaded:
             <p style="color: #6c757d; font-size: 1.1rem;">
                 Upload your CSV file to get started with AI-powered analysis
             </p>
-            <div style="margin-top: 2rem; background: #f8f9fa; padding: 1.5rem; border-radius: 15px;">
-                <p style="font-weight: 600;">📌 Quick Start Guide</p>
-                <p style="text-align: left; font-size: 0.95rem;">
+            <div style="
+                margin-top: 2rem;
+                background: #06213d;
+                padding: 1.5rem;
+                border-radius: 15px;
+                color: white;
+            ">
+                <p style="font-weight: 600; color: white;">📌 Quick Start Guide</p>
+                <p style="text-align: left; font-size: 0.95rem; color: white;">
                     1️⃣ Upload a CSV file from the sidebar<br>
                     2️⃣ View automatic dataset summary<br>
                     3️⃣ Ask questions about your data<br>
                     4️⃣ Generate professional charts<br>
                     5️⃣ Export PDF reports
                 </p>
-            </div>
+</div>
         </div>
         """, unsafe_allow_html=True)
 
