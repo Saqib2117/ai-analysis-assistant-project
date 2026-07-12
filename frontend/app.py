@@ -158,6 +158,15 @@ st.markdown("""
         border-top: 1px solid #dee2e6;
         margin-top: 2rem;
     }
+    
+    /* AI Explanation Box */
+    .ai-box {
+        background: linear-gradient(135deg, #f0f4ff 0%, #e8eeff 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        border-left: 5px solid #667eea;
+        margin-top: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -165,10 +174,8 @@ st.markdown("""
 # SESSION STATE
 # ================================================================
 
-# --- UPDATED: Backend URL is now your deployed Hugging Face Space ---
 if 'api_url' not in st.session_state:
-    st.session_state.api_url = "https://saqib21-fastapi-backend.hf.space"  # <--- DEPLOYED URL
-
+    st.session_state.api_url = "https://saqib21-fastapi-backend.hf.space"
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 if 'summary' not in st.session_state:
@@ -183,13 +190,14 @@ if 'llm_available' not in st.session_state:
     st.session_state.llm_available = False
 if 'llm_provider' not in st.session_state:
     st.session_state.llm_provider = "None"
+if 'api_key_error' not in st.session_state:
+    st.session_state.api_key_error = None
 
 # ================================================================
 # SIDEBAR
 # ================================================================
 
 with st.sidebar:
-    # Logo
     st.markdown("""
     <div style="text-align: center; padding: 1rem 0;">
         <div style="font-size: 4rem;">📊</div>
@@ -214,7 +222,6 @@ with st.sidebar:
     
     st.divider()
     
-    # Upload Section
     st.markdown("""
     <h4 style="color: #667eea; margin-bottom: 0.5rem;">📤 Upload Dataset</h4>
     <p style="color: #6c757d; font-size: 0.85rem;">Upload a CSV file to analyze</p>
@@ -260,7 +267,6 @@ with st.sidebar:
     
     st.divider()
     
-    # Features
     st.markdown("""
     <h4 style="color: #667eea; margin-bottom: 0.5rem;">✨ Features</h4>
     """, unsafe_allow_html=True)
@@ -278,7 +284,6 @@ with st.sidebar:
     
     st.divider()
     
-    # Backend Status
     st.markdown(f"""
     <p style="font-size: 0.8rem; color: #6c757d; text-align: center;">
         🔗 Backend: Hugging Face<br>
@@ -298,28 +303,26 @@ st.markdown('<p class="sub-header">Upload your CSV and ask questions in natural 
 # ================================================================
 
 if not st.session_state.data_loaded:
-    # Welcome Screen
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("""
-        <div style="text-align: center; padding: 3rem 1rem;">
-            <div style="font-size: 5rem;">🚀</div>
-            <h2 style="color: #667eea; margin-top: 1rem;">Welcome to AI Data Analysis</h2>
-            <p style="color: #6c757d; font-size: 1.1rem;">
-                Upload your CSV file to get started with AI-powered analysis
+    # Welcome Screen - More Colorful
+    st.markdown("""
+    <div style="text-align: center; padding: 2rem 1rem;">
+        <div style="font-size: 5rem;">🚀</div>
+        <h2 style="color: #667eea; margin-top: 0.5rem;">AI Data Analysis Assistant</h2>
+        <p style="color: #6c757d; font-size: 1.1rem; max-width: 600px; margin: 0 auto;">
+            Upload your CSV file to get started with AI-powered analysis
+        </p>
+        <div style="margin-top: 2rem; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); padding: 2rem; border-radius: 15px; max-width: 500px; margin-left: auto; margin-right: auto;">
+            <p style="font-weight: 600; color: #667eea;">📌 Quick Start Guide</p>
+            <p style="text-align: left; font-size: 0.95rem;">
+                1️⃣ Click <strong>"Upload Dataset"</strong> in the sidebar<br>
+                2️⃣ Select a CSV file from your computer<br>
+                3️⃣ View automatic dataset summary<br>
+                4️⃣ Ask questions about your data<br>
+                5️⃣ Generate professional charts
             </p>
-            <div style="margin-top: 2rem; background: #f8f9fa; padding: 1.5rem; border-radius: 15px;">
-                <p style="font-weight: 600;">📌 Quick Start Guide</p>
-                <p style="text-align: left; font-size: 0.95rem;">
-                    1️⃣ Upload a CSV file from the sidebar<br>
-                    2️⃣ View automatic dataset summary<br>
-                    3️⃣ Ask questions about your data<br>
-                    4️⃣ Generate professional charts<br>
-                    5️⃣ Export PDF reports
-                </p>
-            </div>
         </div>
-        """, unsafe_allow_html=True)
+    </div>
+    """, unsafe_allow_html=True)
 
 else:
     summary = st.session_state.summary
@@ -394,7 +397,6 @@ else:
                     st.write(f"Median: {stats['median']:.2f}")
                     st.write(f"Std: {stats['std']:.2f}")
         
-        # Chart Preview
         st.divider()
         st.subheader("📈 Chart Preview")
         if st.session_state.chart_path:
@@ -420,7 +422,6 @@ else:
     with tab2:
         st.subheader("💬 Ask Questions About Your Data")
         
-        # Chat History
         for item in st.session_state.chat_history:
             if item['type'] == 'question':
                 st.markdown(f"""
@@ -436,7 +437,6 @@ else:
                 </div>
                 """, unsafe_allow_html=True)
         
-        # Question Input
         st.divider()
         col1, col2 = st.columns([5, 1])
         
@@ -472,7 +472,6 @@ else:
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
         
-        # Quick Questions
         st.markdown("---")
         st.caption("💡 Try these example questions:")
         cols = st.columns(3)
@@ -488,7 +487,7 @@ else:
                     st.rerun()
     
     # ================================================================
-    # TAB 3: Charts
+    # TAB 3: Charts (FIXED - with AI Explanation)
     # ================================================================
     
     with tab3:
@@ -530,7 +529,6 @@ else:
         if st.session_state.chart_path:
             st.image(st.session_state.chart_path, use_container_width=True)
             
-            # Download Chart
             with open(st.session_state.chart_path, "rb") as f:
                 st.download_button(
                     label="📥 Download Chart (PNG)",
@@ -539,9 +537,48 @@ else:
                     mime="image/png",
                     use_container_width=True
                 )
+        
+        # --- AI Chart Explanation Section (FIXED) ---
+        st.divider()
+        st.subheader("🤖 AI Chart Explanation")
+        
+        if not st.session_state.llm_available:
+            st.warning("⚠️ **DeepSeek API Key Not Configured on Backend.**")
+            st.markdown("""
+            **To enable AI explanations:**
+            1. Go to your Hugging Face Space → **Settings** → **Variables and secrets**
+            2. Click **"New secret"**
+            3. **Name:** `DEEPSEEK_API_KEY`
+            4. **Value:** Your DeepSeek API key (starts with `sk-`)
+            5. Click **"Add secret"**
+            6. Restart your Space
+            """)
+        
+        if st.button("📊 Explain This Chart with AI", use_container_width=True):
+            with st.spinner("🤖 AI is analyzing your chart..."):
+                try:
+                    response = requests.post(f"{st.session_state.api_url}/explain-chart")
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get('success'):
+                            st.markdown(f"""
+                            <div class="ai-box">
+                                <h4 style="color: #667eea;">🤖 AI Analysis</h4>
+                                <p style="font-size: 1.05rem; line-height: 1.8;">{result.get('explanation', 'No explanation generated')}</p>
+                                <p style="color: #6c757d; font-size: 0.85rem; margin-top: 0.5rem;">
+                                    Powered by {result.get('llm_provider', 'AI')}
+                                </p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.warning(result.get('explanation', '⚠️ LLM not configured. Please add DEEPSEEK_API_KEY as a Secret on Hugging Face.'))
+                    else:
+                        st.error(f"Error: {response.text}")
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
     
     # ================================================================
-    # TAB 4: AI Explain
+    # TAB 4: AI Explain (FIXED - with DeepSeek Setup Instructions)
     # ================================================================
     
     with tab4:
@@ -552,6 +589,31 @@ else:
         </p>
         """, unsafe_allow_html=True)
         
+        if not st.session_state.llm_available:
+            st.warning("⚠️ **DeepSeek API Key Not Configured on Backend.**")
+            st.markdown("""
+            ### 🔑 How to Add DeepSeek API Key to Hugging Face:
+            
+            1. Go to your Hugging Face Space:  
+               `https://huggingface.co/spaces/saqib21/fastapi-backend/settings`
+            
+            2. Scroll to **"Variables and secrets"**
+            
+            3. Click **"New secret"**
+            
+            4. **Name:** `DEEPSEEK_API_KEY`
+            
+            5. **Value:** Your DeepSeek API key (starts with `sk-`)
+            
+            6. Click **"Add secret"**
+            
+            7. **Restart your Space** (Settings → Restart this Space)
+            
+            8. Wait for rebuild (~2 minutes)
+            
+            9. Refresh this page!
+            """)
+        
         if st.button("📊 Explain My Data with AI", use_container_width=True):
             with st.spinner("🤖 AI is analyzing your data..."):
                 try:
@@ -560,16 +622,16 @@ else:
                         result = response.json()
                         if result.get('success'):
                             st.markdown(f"""
-                            <div style="background: #f0f4ff; padding: 2rem; border-radius: 15px; border-left: 5px solid #667eea; margin-top: 1rem;">
+                            <div class="ai-box">
                                 <h4 style="color: #667eea;">🤖 AI Analysis</h4>
                                 <p style="font-size: 1.05rem; line-height: 1.8;">{result.get('explanation', 'No explanation generated')}</p>
-                                <p style="color: #6c757d; font-size: 0.85rem; margin-top: 1rem;">
+                                <p style="color: #6c757d; font-size: 0.85rem; margin-top: 0.5rem;">
                                     Powered by {result.get('llm_provider', 'AI')}
                                 </p>
                             </div>
                             """, unsafe_allow_html=True)
                         else:
-                            st.warning(result.get('explanation', 'Failed to generate explanation'))
+                            st.warning(result.get('explanation', '⚠️ LLM not configured. Please add DEEPSEEK_API_KEY as a Secret on Hugging Face.'))
                     else:
                         st.error(f"Error: {response.text}")
                 except Exception as e:
