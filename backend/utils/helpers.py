@@ -42,38 +42,35 @@ def convert_to_serializable(obj):
 def get_dataset_summary(dataframe):
     """Generate comprehensive dataset summary with JSON serializable types"""
     summary = {
-        "total_rows": int(len(dataframe)),  # Convert to int
-        "total_columns": int(len(dataframe.columns)),  # Convert to int
+        "total_rows": int(len(dataframe)),
+        "total_columns": int(len(dataframe.columns)),
         "column_names": dataframe.columns.tolist(),
         "data_types": dataframe.dtypes.astype(str).to_dict(),
         "missing_values": dataframe.isnull().sum().to_dict(),
         "missing_percentage": (dataframe.isnull().sum() / len(dataframe) * 100).round(2).to_dict(),
-        "duplicate_rows": int(dataframe.duplicated().sum()),  # Convert to int
+        "duplicate_rows": int(dataframe.duplicated().sum()),
     }
     
-    # Convert missing values to int
     summary["missing_values"] = {k: int(v) for k, v in summary["missing_values"].items()}
     
-    # Numeric statistics
     numeric_cols = dataframe.select_dtypes(include=[np.number]).columns
     if len(numeric_cols) > 0:
         summary["numeric_stats"] = {}
         for col in numeric_cols:
             summary["numeric_stats"][col] = {
-                "min": float(dataframe[col].min()),  # Convert to float
-                "max": float(dataframe[col].max()),  # Convert to float
-                "mean": float(dataframe[col].mean()),  # Convert to float
-                "median": float(dataframe[col].median()),  # Convert to float
-                "std": float(dataframe[col].std()),  # Convert to float
+                "min": float(dataframe[col].min()),
+                "max": float(dataframe[col].max()),
+                "mean": float(dataframe[col].mean()),
+                "median": float(dataframe[col].median()),
+                "std": float(dataframe[col].std()),
             }
     
-    # Categorical statistics
     categorical_cols = dataframe.select_dtypes(include=['object']).columns
     if len(categorical_cols) > 0:
         summary["categorical_stats"] = {}
         for col in categorical_cols:
             summary["categorical_stats"][col] = {
-                "unique_values": int(dataframe[col].nunique()),  # Convert to int
+                "unique_values": int(dataframe[col].nunique()),
                 "top_values": dataframe[col].value_counts().head(5).to_dict(),
             }
     

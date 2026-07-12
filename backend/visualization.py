@@ -30,9 +30,7 @@ class ChartGenerator:
         
         fig, ax = plt.subplots(figsize=(10, 6))
         
-        # Determine best chart type
         if len(categorical_cols) >= 1 and len(numeric_cols) >= 1:
-            # Bar chart
             cat_col = categorical_cols[0]
             num_col = numeric_cols[0]
             
@@ -50,7 +48,6 @@ class ChartGenerator:
                        f'{value:,.0f}', ha='center', va='bottom', fontsize=9)
         
         elif len(categorical_cols) >= 1:
-            # Pie chart
             data = self.df[categorical_cols[0]].value_counts().head(8)
             colors = plt.cm.Set3(np.linspace(0, 1, len(data)))
             ax.pie(data.values, labels=data.index.astype(str), autopct='%1.1f%%',
@@ -58,25 +55,21 @@ class ChartGenerator:
             ax.set_title(f"Distribution of {categorical_cols[0]}", fontsize=14, fontweight='bold')
         
         elif len(numeric_cols) >= 2:
-            # Scatter plot
             ax.scatter(self.df[numeric_cols[0]], self.df[numeric_cols[1]], alpha=0.6)
             ax.set_title(f"{numeric_cols[1]} vs {numeric_cols[0]}", fontsize=14, fontweight='bold')
             ax.set_xlabel(numeric_cols[0], fontsize=12)
             ax.set_ylabel(numeric_cols[1], fontsize=12)
         
         else:
-            # Histogram
             ax.hist(self.df[numeric_cols[0]], bins=20, color='#2E86AB', edgecolor='black')
             ax.set_title(f"Distribution of {numeric_cols[0]}", fontsize=14, fontweight='bold')
             ax.set_xlabel(numeric_cols[0], fontsize=12)
             ax.set_ylabel("Frequency", fontsize=12)
         
         plt.tight_layout()
-        
         chart_filename = self._generate_filename("chart")
         plt.savefig(chart_filename, dpi=300, bbox_inches='tight')
         plt.close()
-        
         return chart_filename
     
     def generate_bar_chart(self, x_column, y_column=None):

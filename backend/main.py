@@ -59,7 +59,7 @@ if DEEPSEEK_API_KEY and DEEPSEEK_API_KEY.startswith("sk-"):
     LLM_PROVIDER = "DeepSeek"
     print(f"✅ DeepSeek API loaded successfully!")
 else:
-    print("⚠️ DEEPSEEK_API_KEY not found. Set it in .env file.")
+    print("⚠️ DEEPSEEK_API_KEY not found. Set it in .env file or Hugging Face Secrets.")
 
 def call_llm(prompt):
     """Call DeepSeek API"""
@@ -78,7 +78,7 @@ def call_llm(prompt):
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.3,
-            "max_tokens": 500
+            "max_tokens": 800
         }
         
         response = requests.post(
@@ -98,13 +98,6 @@ def call_llm(prompt):
     except Exception as e:
         print(f"DeepSeek Error: {e}")
         return None
-
-# ================================================================
-# IMPORT LOCAL MODULES
-# ================================================================
-
-from analysis import DataAnalyzer
-from visualization import ChartGenerator
 
 # ================================================================
 # FASTAPI APP
@@ -136,6 +129,9 @@ os.makedirs("charts", exist_ok=True)
 class QuestionRequest(BaseModel):
     question: str
 
+class ChartExplanationRequest(BaseModel):
+    chart_type: str = "Auto"
+
 # ================================================================
 # API Endpoints
 # ================================================================
@@ -157,20 +153,16 @@ async def upload_csv(file: UploadFile = File(...)):
     global analyzer, chart_path
     
     try:
-        # Save file
         file_path = f"data/{file.filename}"
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # Read CSV
         df = pd.read_csv(file_path)
         analyzer.load_data(df)
         
-        # Auto-generate chart
         chart_gen = ChartGenerator(df)
         chart_path = chart_gen.generate_chart()
         
-        # Get summary and convert to serializable
         summary = analyzer.get_summary()
         serializable_summary = convert_to_serializable(summary)
         
@@ -277,54 +269,62 @@ async def get_specific_chart(
     return FileResponse(chart_path, media_type="image/png")
 
 @app.post("/explain-chart")
-async def explain_chart():
-    """Generate AI explanation for the current chart (Bonus Feature)"""
+async def explain_chart(request: ChartExplanationRequest = None):
+    """Generate AI explanation for the current chart"""
     if not analyzer.is_loaded:
         raise HTTPException(status_code=400, detail="No data loaded")
     
     if not LLM_AVAILABLE:
         return JSONResponse({
             "success": False,
-            "explanation": "LLM not available. Please set DEEPSEEK_API_KEY.",
+            "explanation": "⚠️ DeepSeek API key not configured.",
             "llm_available": False
         })
     
     try:
-        # Get dataset summary
-        summary = analyzer.get_summary()
+        # Get chart type from request
+        chart_type = "Auto"
+        if request and request.chart_type:
+            chart_type = request.chart_type
         
-        # Prepare context for LLM
-        columns_info = ", ".join(summary.get('column_names', []))
-        total_rows = summary.get('total_rows', 0)
+        # Get the actual data being displayed in the chart
+        df = analyzer.df
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
         
-        # Get numeric columns and their stats
-        numeric_stats = summary.get('numeric_stats', {})
-        stats_text = ""
-        for col, stats in numeric_stats.items():
-            stats_text += f"- {col}: min={stats['min']}, max={stats['max']}, mean={stats['mean']:.2f}\n"
-        
-        # Get categorical columns
-        categorical_cols = [col for col, dtype in summary.get('data_types', {}).items() if dtype == 'object']
-        cat_text = ", ".join(categorical_cols) if categorical_cols else "None"
+        # Get the actual chart data (what's being plotted)
+        chart_data = ""
+        if chart_type == "Bar" or chart_type == "Auto":
+            if categorical_cols and numeric_cols:
+                cat_col = categorical_cols[0]
+                num_col = numeric_cols[0]
+                top_5 = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False).head(5)
+                chart_data = f"Top 5 categories by {num_col}:\n"
+                for cat, val in top_5.items():
+                    chart_data += f"- {cat}: {val:,.0f}\n"
+        elif chart_type == "Pie":
+            if categorical_cols:
+                cat_col = categorical_cols[0]
+                top_5 = df[cat_col].value_counts().head(5)
+                chart_data = f"Top 5 categories:\n"
+                for cat, count in top_5.items():
+                    pct = (count / len(df)) * 100
+                    chart_data += f"- {cat}: {count} ({pct:.1f}%)\n"
         
         prompt = f"""
-        You are a data analysis expert. Analyze the following dataset and provide a clear, easy-to-understand explanation of what the data shows.
+        You are a data analysis expert. Analyze the following chart and explain ONLY what this specific chart shows.
         
-        Dataset Overview:
-        - Total Rows: {total_rows}
-        - Columns: {columns_info}
-        - Categorical Columns: {cat_text}
+        CHART TYPE: {chart_type}
         
-        Numeric Statistics:
-        {stats_text}
+        CHART DATA:
+        {chart_data}
         
         Please provide:
-        1. A brief overview of what this dataset represents (2-3 sentences)
-        2. Key insights from the numeric data (2-3 bullet points)
-        3. Any notable patterns or trends you observe
-        4. A simple summary that a non-technical person would understand
+        1. What this chart shows in simple terms (1 sentence)
+        2. The most prominent observation from this chart (1 sentence)
+        3. One key insight from this specific chart (1 sentence)
         
-        Keep your response professional but simple. Use bullet points where appropriate.
+        Keep it short, simple, and focused ONLY on this chart. Do NOT give general dataset insights.
         """
         
         llm_response = call_llm(prompt)
@@ -338,7 +338,91 @@ async def explain_chart():
         else:
             return JSONResponse({
                 "success": False,
-                "explanation": "Failed to generate explanation from LLM",
+                "explanation": "⚠️ Failed to generate explanation.",
+                "llm_available": False
+            })
+    
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "explanation": f"Error: {str(e)}",
+            "llm_available": False
+        })
+
+@app.post("/explain-data")
+async def explain_data():
+    """Generate AI explanation for the entire dataset"""
+    if not analyzer.is_loaded:
+        raise HTTPException(status_code=400, detail="No data loaded")
+    
+    if not LLM_AVAILABLE:
+        return JSONResponse({
+            "success": False,
+            "explanation": "⚠️ DeepSeek API key not configured.",
+            "llm_available": False
+        })
+    
+    try:
+        summary = analyzer.get_summary()
+        columns_info = ", ".join(summary.get('column_names', []))
+        total_rows = summary.get('total_rows', 0)
+        
+        # Get numeric stats
+        numeric_stats = summary.get('numeric_stats', {})
+        stats_text = ""
+        for col, stats in numeric_stats.items():
+            stats_text += f"- {col}: min={stats['min']}, max={stats['max']}, mean={stats['mean']:.2f}, median={stats['median']:.2f}\n"
+        
+        # Get categorical columns
+        categorical_cols = [col for col, dtype in summary.get('data_types', {}).items() if dtype == 'object']
+        cat_text = ", ".join(categorical_cols) if categorical_cols else "None"
+        
+        # Get sample data
+        sample_data = analyzer.df.head(5).to_string()
+        
+        prompt = f"""
+        You are a data analysis expert. Analyze the following dataset and provide a comprehensive, easy-to-understand explanation.
+        
+        DATASET OVERVIEW:
+        - Total Rows: {total_rows}
+        - Columns: {columns_info}
+        - Categorical Columns: {cat_text}
+        
+        NUMERIC STATISTICS:
+        {stats_text}
+        
+        SAMPLE DATA (First 5 rows):
+        {sample_data}
+        
+        Please provide a complete analysis with:
+        
+        1. DATASET OVERVIEW (2-3 sentences):
+           What kind of data is this? What does it represent?
+        
+        2. KEY STATISTICS (2-3 bullet points):
+           Highlight the most important numbers from the data.
+        
+        3. NOTABLE PATTERNS (2-3 bullet points):
+           What interesting patterns or relationships do you see?
+        
+        4. SUMMARY (1-2 sentences):
+           A simple summary that a non-technical person would understand.
+        
+        Make it professional but easy to understand.
+        """
+        
+        llm_response = call_llm(prompt)
+        
+        if llm_response:
+            return JSONResponse({
+                "success": True,
+                "explanation": llm_response,
+                "llm_provider": LLM_PROVIDER
+            })
+        else:
+            return JSONResponse({
+                "success": False,
+                "explanation": "⚠️ Failed to generate explanation.",
                 "llm_available": False
             })
     
