@@ -283,31 +283,37 @@ async def explain_chart(request: ChartExplanationRequest = None):
     
     try:
         chart_type = "Auto"
-        chart_data = None
-        
-        if request:
+        if request and request.chart_type:
             chart_type = request.chart_type
-            if hasattr(request, 'chart_data'):
-                chart_data = request.chart_data
         
         df = analyzer.df
         summary = analyzer.get_summary()
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
         
-        # --- AUTO-DETECT CHART DATA ---
+        # --- BUILD CHART DATA DESCRIPTION ---
         chart_info = ""
         
         if chart_type == "Histogram" or chart_type == "Auto":
             if numeric_cols:
-                # Get the first numeric column (usually the one used in chart)
                 col = numeric_cols[0]
                 stats = summary.get('numeric_stats', {}).get(col, {})
+                # Get actual distribution data
+                hist_values, bin_edges = np.histogram(df[col].dropna(), bins=10)
+                hist_data = ""
+                for i in range(len(hist_values)):
+                    if i < 5:  # Show top 5 bins
+                        hist_data += f"- {bin_edges[i]:.1f} to {bin_edges[i+1]:.1f}: {hist_values[i]} people\n"
+                
                 chart_info = f"""
-                This is a {chart_type} showing the distribution of '{col}'.
+                CHART TYPE: Histogram
+                COLUMN: {col}
+                TOTAL RECORDS: {len(df)}
+                
+                DISTRIBUTION (Top 5 bins):
+                {hist_data}
                 
                 KEY STATISTICS:
-                - Total Records: {len(df)}
                 - Min: {stats.get('min', 'N/A')}
                 - Max: {stats.get('max', 'N/A')}
                 - Mean: {stats.get('mean', 'N/A'):.2f}
@@ -315,24 +321,55 @@ async def explain_chart(request: ChartExplanationRequest = None):
                 - Standard Deviation: {stats.get('std', 'N/A'):.2f}
                 """
         
-        elif chart_type == "Bar" or chart_type == "Pie":
+        elif chart_type == "Bar":
             if categorical_cols and numeric_cols:
                 cat_col = categorical_cols[0]
                 num_col = numeric_cols[0]
                 top_5 = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False).head(5)
                 
                 chart_info = f"""
-                This is a {chart_type} chart showing '{num_col}' by '{cat_col}'.
+                CHART TYPE: Bar Chart
+                X-AXIS: {cat_col}
+                Y-AXIS: {num_col}
                 
                 TOP 5 CATEGORIES:
                 """
                 for cat, val in top_5.items():
                     chart_info += f"- {cat}: {val:,.0f}\n"
         
+        elif chart_type == "Pie":
+            if categorical_cols:
+                cat_col = categorical_cols[0]
+                top_5 = df[cat_col].value_counts().head(5)
+                
+                chart_info = f"""
+                CHART TYPE: Pie Chart
+                COLUMN: {cat_col}
+                
+                TOP 5 CATEGORIES:
+                """
+                for cat, count in top_5.items():
+                    pct = (count / len(df)) * 100
+                    chart_info += f"- {cat}: {count} ({pct:.1f}%)\n"
+        
+        elif chart_type == "Scatter":
+            if len(numeric_cols) >= 2:
+                col1 = numeric_cols[0]
+                col2 = numeric_cols[1]
+                chart_info = f"""
+                CHART TYPE: Scatter Plot
+                X-AXIS: {col1}
+                Y-AXIS: {col2}
+                TOTAL POINTS: {len(df)}
+                
+                KEY STATISTICS:
+                - {col1} - Min: {df[col1].min():.2f}, Max: {df[col1].max():.2f}, Mean: {df[col1].mean():.2f}
+                - {col2} - Min: {df[col2].min():.2f}, Max: {df[col2].max():.2f}, Mean: {df[col2].mean():.2f}
+                """
+        
         prompt = f"""
         You are a data analysis expert. Analyze this chart and explain what it shows.
         
-        CHART TYPE: {chart_type}
         {chart_info}
         
         Please provide:
