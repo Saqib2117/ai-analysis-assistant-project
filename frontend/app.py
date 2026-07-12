@@ -99,13 +99,16 @@ st.markdown("""
         margin-bottom: 0.5rem;
         box-shadow: 0 2px 10px rgba(102, 126, 234, 0.3);
     }
+            
     .assistant-msg {
-        background: #f1f3f5;
+        background: #06213d;
+        color: white;
         padding: 0.8rem 1.2rem;
         border-radius: 18px 18px 18px 5px;
         max-width: 70%;
         margin-right: auto;
         margin-bottom: 0.5rem;
+        box-shadow: 0 3px 12px rgba(6, 33, 61, 0.35);
     }
     
     /* Sidebar */
@@ -437,7 +440,7 @@ else:
                 st.markdown(f"""
                 <div class="assistant-msg">
                     <strong>🤖 AI:</strong><br>{item['text']}
-                    <br><small style="color: #6c757d;">{item.get('explanation', '')}</small>
+                    <br><small style="color: #d6e6ff;">{item.get('explanation', '')}</small>
                 </div>
                 """, unsafe_allow_html=True)
         
