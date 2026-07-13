@@ -292,13 +292,37 @@ async def explain_chart(request: ChartExplanationRequest = None):
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
         
-        # --- BUILD CHART DESCRIPTION BASED ON CHART TYPE ---
+        # --- BUILD CHART DESCRIPTION ---
         chart_info = ""
         
         # ============================================================
+        # PIE CHART
+        # ============================================================
+        if chart_type == "Pie":
+            if categorical_cols:
+                cat_col = categorical_cols[0]
+                top_5 = df[cat_col].value_counts().head(5)
+                
+                chart_info = f"""
+CHART TYPE: Pie Chart
+COLUMN: {cat_col}
+TOTAL RECORDS: {len(df)}
+
+DISTRIBUTION:
+"""
+                for cat, count in top_5.items():
+                    pct = (count / len(df)) * 100
+                    chart_info += f"- {cat}: {count} ({pct:.1f}%)\n"
+                
+                # Add total
+                chart_info += f"\nTotal: {len(df)} records"
+            else:
+                chart_info = "ERROR: No categorical column found for Pie Chart. Please use a column with text/category values."
+
+        # ============================================================
         # BAR CHART
         # ============================================================
-        if chart_type == "Bar":
+        elif chart_type == "Bar":
             if categorical_cols and numeric_cols:
                 cat_col = categorical_cols[0]
                 num_col = numeric_cols[0]
@@ -315,29 +339,8 @@ TOP 5 CATEGORIES:
                 for cat, val in top_5.items():
                     chart_info += f"- {cat}: {val:,.0f}\n"
             else:
-                chart_info = "No categorical or numeric columns found for Bar Chart."
-        
-        # ============================================================
-        # PIE CHART
-        # ============================================================
-        elif chart_type == "Pie":
-            if categorical_cols:
-                cat_col = categorical_cols[0]
-                top_5 = df[cat_col].value_counts().head(5)
-                
-                chart_info = f"""
-CHART TYPE: Pie Chart
-COLUMN: {cat_col}
-TOTAL RECORDS: {len(df)}
+                chart_info = "ERROR: Need at least one categorical column and one numeric column for Bar Chart."
 
-DISTRIBUTION:
-"""
-                for cat, count in top_5.items():
-                    pct = (count / len(df)) * 100
-                    chart_info += f"- {cat}: {count} ({pct:.1f}%)\n"
-            else:
-                chart_info = "No categorical column found for Pie Chart."
-        
         # ============================================================
         # HISTOGRAM
         # ============================================================
@@ -359,8 +362,8 @@ KEY STATISTICS:
 - Standard Deviation: {stats.get('std', 'N/A'):.2f}
 """
             else:
-                chart_info = "No numeric column found for Histogram."
-        
+                chart_info = "ERROR: No numeric column found for Histogram."
+
         # ============================================================
         # SCATTER PLOT
         # ============================================================
@@ -379,8 +382,8 @@ KEY STATISTICS:
 - {col2}: Min={df[col2].min():.2f}, Max={df[col2].max():.2f}, Mean={df[col2].mean():.2f}
 """
             else:
-                chart_info = "Need at least 2 numeric columns for Scatter Plot."
-        
+                chart_info = "ERROR: Need at least 2 numeric columns for Scatter Plot."
+
         # ============================================================
         # AUTO (Default)
         # ============================================================
@@ -429,8 +432,8 @@ KEY STATISTICS:
 - Median: {stats.get('median', 'N/A'):.2f}
 """
             else:
-                chart_info = "No suitable data found for chart."
-        
+                chart_info = "ERROR: No suitable data found for chart."
+
         # ============================================================
         # BUILD PROMPT
         # ============================================================
@@ -567,55 +570,178 @@ async def export_pdf():
     from reportlab.lib.pagesizes import letter
     from reportlab.pdfgen import canvas
     from reportlab.lib.utils import ImageReader
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.pagesizes import letter
+    import io
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     pdf_path = f"analysis_report_{timestamp}.pdf"
     
-    c = canvas.Canvas(pdf_path, pagesize=letter)
-    width, height = letter
+    # Create PDF
+    doc = SimpleDocTemplate(pdf_path, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
     
-    c.setFont("Helvetica-Bold", 20)
-    c.drawString(50, height - 50, "AI Data Analysis Report")
+    # 1. Title
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=24,
+        textColor=colors.HexColor('#667eea'),
+        alignment=TA_CENTER,
+        spaceAfter=20
+    )
+    story.append(Paragraph("📊 AI Data Analysis Report", title_style))
+    story.append(Spacer(1, 10))
     
+    # 2. Metadata
+    meta_style = ParagraphStyle(
+        'MetaStyle',
+        parent=styles['Normal'],
+        fontSize=10,
+        textColor=colors.grey,
+        alignment=TA_CENTER
+    )
     summary = analyzer.get_summary()
-    c.setFont("Helvetica", 10)
-    c.drawString(50, height - 80, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    c.drawString(50, height - 95, f"Rows: {summary.get('total_rows', 0)}, Columns: {summary.get('total_columns', 0)}")
+    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Rows: {summary.get('total_rows', 0)} | Columns: {summary.get('total_columns', 0)}", meta_style))
+    story.append(Spacer(1, 20))
     
-    y = height - 130
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(50, y, "Dataset Summary")
-    y -= 25
+    # 3. Dataset Summary
+    summary_style = ParagraphStyle(
+        'SummaryStyle',
+        parent=styles['Heading2'],
+        fontSize=16,
+        textColor=colors.HexColor('#333333'),
+        spaceAfter=10
+    )
+    story.append(Paragraph("📋 Dataset Summary", summary_style))
     
-    c.setFont("Helvetica", 10)
-    c.drawString(50, y, f"Total Records: {summary.get('total_rows', 0)}")
-    y -= 15
-    c.drawString(50, y, f"Total Columns: {summary.get('total_columns', 0)}")
-    y -= 15
-    c.drawString(50, y, f"Duplicate Rows: {summary.get('duplicate_rows', 0)}")
-    y -= 25
+    # Summary table
+    summary_data = [
+        ["Metric", "Value"],
+        ["Total Records", f"{summary.get('total_rows', 0):,}"],
+        ["Total Columns", f"{summary.get('total_columns', 0)}"],
+        ["Duplicate Rows", f"{summary.get('duplicate_rows', 0)}"],
+        ["Missing Values", f"{sum(summary.get('missing_values', {}).values()):,}"],
+    ]
     
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, "Columns:")
-    y -= 20
-    c.setFont("Helvetica", 10)
-    for col in summary.get('column_names', [])[:10]:
-        c.drawString(50, y, f"  • {col}")
-        y -= 15
+    summary_table = Table(summary_data, colWidths=[200, 200])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (1, 0), colors.HexColor('#667eea')),
+        ('TEXTCOLOR', (0, 0), (1, 0), colors.white),
+        ('ALIGN', (0, 0), (1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (1, 0), 12),
+        ('BACKGROUND', (0, 1), (1, -1), colors.beige),
+        ('GRID', (0, 0), (1, -1), 1, colors.grey),
+    ]))
+    story.append(summary_table)
+    story.append(Spacer(1, 20))
     
-    try:
-        img = ImageReader(chart_path)
-        c.drawImage(img, 50, y - 250, width=500, height=250, preserveAspectRatio=True)
-    except:
-        c.drawString(50, y, "Chart not available")
+    # 4. Columns
+    col_style = ParagraphStyle(
+        'ColStyle',
+        parent=styles['Heading2'],
+        fontSize=16,
+        textColor=colors.HexColor('#333333'),
+        spaceAfter=10
+    )
+    story.append(Paragraph("📑 Columns", col_style))
     
-    c.save()
+    columns = summary.get('column_names', [])
+    col_data = [["#", "Column Name"]]
+    for i, col in enumerate(columns, 1):
+        col_data.append([str(i), col])
+    
+    col_table = Table(col_data, colWidths=[50, 350])
+    col_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (1, 0), colors.HexColor('#667eea')),
+        ('TEXTCOLOR', (0, 0), (1, 0), colors.white),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (1, 0), 10),
+        ('BACKGROUND', (0, 1), (1, -1), colors.beige),
+        ('GRID', (0, 0), (1, -1), 1, colors.grey),
+        ('FONTSIZE', (0, 1), (1, -1), 9),
+    ]))
+    story.append(col_table)
+    story.append(Spacer(1, 20))
+    
+    # 5. Numeric Statistics
+    if summary.get('numeric_stats'):
+        num_style = ParagraphStyle(
+            'NumStyle',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#333333'),
+            spaceAfter=10
+        )
+        story.append(Paragraph("📊 Numeric Statistics", num_style))
+        
+        # Show top 5 numeric columns
+        num_stats = summary.get('numeric_stats', {})
+        num_data = [["Column", "Min", "Max", "Mean", "Median"]]
+        for col, stats in list(num_stats.items())[:5]:
+            num_data.append([
+                col,
+                f"{stats.get('min', 0):.2f}",
+                f"{stats.get('max', 0):.2f}",
+                f"{stats.get('mean', 0):.2f}",
+                f"{stats.get('median', 0):.2f}"
+            ])
+        
+        num_table = Table(num_data, colWidths=[120, 80, 80, 80, 80])
+        num_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (4, 0), colors.HexColor('#667eea')),
+            ('TEXTCOLOR', (0, 0), (4, 0), colors.white),
+            ('ALIGN', (0, 0), (4, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (4, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (4, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (4, 0), 10),
+            ('BACKGROUND', (0, 1), (4, -1), colors.beige),
+            ('GRID', (0, 0), (4, -1), 1, colors.grey),
+            ('FONTSIZE', (0, 1), (4, -1), 9),
+        ]))
+        story.append(num_table)
+        story.append(Spacer(1, 20))
+    
+    # 6. Chart
+    if chart_path:
+        chart_style = ParagraphStyle(
+            'ChartStyle',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#333333'),
+            spaceAfter=10
+        )
+        story.append(Paragraph("📈 Chart", chart_style))
+        try:
+            img = ImageReader(chart_path)
+            from reportlab.platypus import Image
+            img_width = 500
+            img_height = 300
+            story.append(Image(chart_path, width=img_width, height=img_height))
+        except:
+            story.append(Paragraph("Chart not available", styles['Normal']))
+        story.append(Spacer(1, 20))
+    
+    # 7. Footer
+    footer_style = ParagraphStyle(
+        'FooterStyle',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.grey,
+        alignment=TA_CENTER
+    )
+    story.append(Paragraph("Report generated by AI Data Analysis Assistant", footer_style))
+    story.append(Paragraph("© 2026 Saylani Hackathon", footer_style))
+    
+    # Build PDF
+    doc.build(story)
+    
     return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
-
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "llm_available": LLM_AVAILABLE,
-        "llm_provider": LLM_PROVIDER
-    }

@@ -1,13 +1,15 @@
 """
 Data Analysis Engine for AI Data Analysis Assistant
+AI-First Approach: LLM understands the dataset and answers questions
 """
 
 import pandas as pd
 import numpy as np
+import json
 from utils.helpers import get_dataset_summary
 
 class DataAnalyzer:
-    """Main data analysis class"""
+    """Main data analysis class - AI-First"""
     
     def __init__(self):
         self.df = None
@@ -38,262 +40,320 @@ class DataAnalyzer:
         }
         return info
     
-    def answer_question(self, question, llm_function=None):
-        """Answer natural language questions using pandas + LLM fallback"""
-        question_lower = question.lower()
+    def _format_result(self, result, question):
+        """Format the result for human readability - CLEAN & CONCISE"""
         
-        # ================================================================
-        # 1. HIGHEST / MAXIMUM
-        # ================================================================
-        if "highest" in question_lower or "maximum" in question_lower or "largest" in question_lower:
-            numeric_cols = self.df.select_dtypes(include=[np.number]).columns
-            if len(numeric_cols) > 0:
-                target_col = None
-                for col in numeric_cols:
-                    if col.lower() in question_lower:
-                        target_col = col
-                        break
-                if not target_col:
-                    target_col = numeric_cols[0]
-                
-                max_value = self.df[target_col].max()
-                max_index = self.df[target_col].idxmax()
-                row = self.df.loc[max_index]
-                
-                label_col = None
-                for col in self.df.columns:
-                    if any(word in col.lower() for word in ['product', 'category', 'name', 'city', 'region', 'type']):
-                        label_col = col
-                        break
-                
-                if label_col:
-                    return {
-                        "answer": f"{row[label_col]} with {target_col} of {max_value:,.2f}",
-                        "explanation": f"The highest {target_col} is {max_value:,.2f} from '{row[label_col]}'.",
-                        "success": True,
-                        "method": "pandas"
-                    }
+        # Clean the question
+        clean_question = question.replace("?", "").strip()
+        
+        # If result is a Series (like groupby result) - COMPLEX ANSWER
+        if isinstance(result, pd.Series):
+            sorted_result = result.sort_values(ascending=False)
+            
+            formatted = f"📊 **{clean_question}**\n\n"
+            formatted += "| Category | Value |\n"
+            formatted += "|----------|-------|\n"
+            
+            for idx, val in sorted_result.items():
+                if isinstance(val, (int, float)):
+                    formatted += f"| {idx} | {val:,.2f} |\n"
                 else:
-                    return {
-                        "answer": f"{max_value:,.2f}",
-                        "explanation": f"The maximum {target_col} is {max_value:,.2f}.",
-                        "success": True,
-                        "method": "pandas"
-                    }
+                    formatted += f"| {idx} | {val} |\n"
+            
+            if len(sorted_result) > 0:
+                max_val = sorted_result.max()
+                max_idx = sorted_result.idxmax()
+                min_val = sorted_result.min()
+                min_idx = sorted_result.idxmin()
+                formatted += f"\n\n💡 **Highest:** {max_idx} ({max_val:,.2f}) | **Lowest:** {min_idx} ({min_val:,.2f})"
+            
+            return formatted
         
-        # ================================================================
-        # 2. LOWEST / MINIMUM
-        # ================================================================
-        if "lowest" in question_lower or "minimum" in question_lower or "smallest" in question_lower:
-            numeric_cols = self.df.select_dtypes(include=[np.number]).columns
-            if len(numeric_cols) > 0:
-                target_col = None
-                for col in numeric_cols:
-                    if col.lower() in question_lower:
-                        target_col = col
-                        break
-                if not target_col:
-                    target_col = numeric_cols[0]
-                
-                min_value = self.df[target_col].min()
-                min_index = self.df[target_col].idxmin()
-                row = self.df.loc[min_index]
-                
-                label_col = None
-                for col in self.df.columns:
-                    if any(word in col.lower() for word in ['product', 'category', 'name', 'city', 'region', 'type']):
-                        label_col = col
-                        break
-                
-                if label_col:
-                    return {
-                        "answer": f"{row[label_col]} with {target_col} of {min_value:,.2f}",
-                        "explanation": f"The lowest {target_col} is {min_value:,.2f} from '{row[label_col]}'.",
-                        "success": True,
-                        "method": "pandas"
-                    }
-                else:
-                    return {
-                        "answer": f"{min_value:,.2f}",
-                        "explanation": f"The minimum {target_col} is {min_value:,.2f}.",
-                        "success": True,
-                        "method": "pandas"
-                    }
-        
-        # ================================================================
-        # 3. AVERAGE / MEAN
-        # ================================================================
-        if "average" in question_lower or "mean" in question_lower:
-            numeric_cols = self.df.select_dtypes(include=[np.number]).columns
-            if len(numeric_cols) > 0:
-                target_col = None
-                for col in numeric_cols:
-                    if col.lower() in question_lower:
-                        target_col = col
-                        break
-                if not target_col:
-                    target_col = numeric_cols[0]
-                
-                avg_value = self.df[target_col].mean()
-                return {
-                    "answer": f"{avg_value:.2f}",
-                    "explanation": f"The average {target_col} is {avg_value:.2f}.",
-                    "success": True,
-                    "method": "pandas"
-                }
-        
-        # ================================================================
-        # 4. SUM / TOTAL
-        # ================================================================
-        if "sum" in question_lower or "total" in question_lower:
-            numeric_cols = self.df.select_dtypes(include=[np.number]).columns
-            if len(numeric_cols) > 0:
-                target_col = None
-                for col in numeric_cols:
-                    if col.lower() in question_lower:
-                        target_col = col
-                        break
-                if not target_col:
-                    target_col = numeric_cols[0]
-                
-                sum_value = self.df[target_col].sum()
-                return {
-                    "answer": f"{sum_value:,.2f}",
-                    "explanation": f"The total {target_col} is {sum_value:,.2f}.",
-                    "success": True,
-                    "method": "pandas"
-                }
-        
-        # ================================================================
-        # 5. STANDARD DEVIATION  <--- FIXED!
-        # ================================================================
-        if "standard deviation" in question_lower or "std" in question_lower:
-            numeric_cols = self.df.select_dtypes(include=[np.number]).columns
-            if len(numeric_cols) > 0:
-                target_col = None
-                for col in numeric_cols:
-                    if col.lower() in question_lower:
-                        target_col = col
-                        break
-                if not target_col:
-                    target_col = numeric_cols[0]
-                
-                std_value = self.df[target_col].std()
-                mean_value = self.df[target_col].mean()
-                return {
-                    "answer": f"{std_value:.2f}",
-                    "explanation": f"The standard deviation of {target_col} is {std_value:.2f}. The mean is {mean_value:.2f}.",
-                    "success": True,
-                    "method": "pandas"
-                }
-        
-        # ================================================================
-        # 6. COUNT
-        # ================================================================
-        if "how many" in question_lower or "count" in question_lower:
-            if "unique" in question_lower:
-                for col in self.df.columns:
-                    if any(word in col.lower() for word in ['product', 'category', 'city']):
-                        return {
-                            "answer": f"{self.df[col].nunique()}",
-                            "explanation": f"There are {self.df[col].nunique()} unique {col}s.",
-                            "success": True,
-                            "method": "pandas"
-                        }
+        # If result is a number - SHORT ANSWER WITH FULL SENTENCE
+        elif isinstance(result, (int, float)):
+            # Build a complete sentence
+            # Extract the key from the question
+            question_lower = question.lower()
+            subject = ""
+            if "age" in question_lower:
+                subject = "age"
+            elif "hours" in question_lower or "hour" in question_lower:
+                subject = "hours per week"
+            elif "gain" in question_lower:
+                subject = "capital gain"
+            elif "loss" in question_lower:
+                subject = "capital loss"
+            elif "income" in question_lower:
+                subject = "income"
             else:
-                return {
-                    "answer": f"{len(self.df)}",
-                    "explanation": f"The dataset contains {len(self.df)} total records.",
-                    "success": True,
-                    "method": "pandas"
-                }
-        
-        # ================================================================
-        # 7. MOST FREQUENT / MOST COMMON
-        # ================================================================
-        if "most frequent" in question_lower or "most common" in question_lower:
-            for col in self.df.columns:
-                if any(word in col.lower() for word in ['category', 'type', 'city', 'status']):
-                    top_value = self.df[col].value_counts().index[0]
-                    top_count = self.df[col].value_counts().iloc[0]
-                    percentage = (top_count / len(self.df)) * 100
-                    return {
-                        "answer": f"{top_value} ({top_count} occurrences, {percentage:.1f}%)",
-                        "explanation": f"The most frequent {col} is '{top_value}' with {top_count} occurrences ({percentage:.1f}%).",
-                        "success": True,
-                        "method": "pandas"
-                    }
-        
-        # ================================================================
-        # 8. MEDIAN
-        # ================================================================
-        if "median" in question_lower:
-            numeric_cols = self.df.select_dtypes(include=[np.number]).columns
-            if len(numeric_cols) > 0:
-                target_col = None
-                for col in numeric_cols:
+                # Try to find the column name in the question
+                for col in self.df.columns:
                     if col.lower() in question_lower:
-                        target_col = col
+                        subject = col
                         break
-                if not target_col:
-                    target_col = numeric_cols[0]
-                
-                median_value = self.df[target_col].median()
-                return {
-                    "answer": f"{median_value:.2f}",
-                    "explanation": f"The median {target_col} is {median_value:.2f}.",
-                    "success": True,
-                    "method": "pandas"
-                }
+                if not subject:
+                    subject = "value"
+            
+            return f"The average {subject} in the dataset is **{result:,.2f}**."
         
-        # ================================================================
-        # 9. LLM FALLBACK (if pandas can't answer)
-        # ================================================================
+        # If result is a string
+        elif isinstance(result, str):
+            return result
+        
+        # If result is a DataFrame
+        elif isinstance(result, pd.DataFrame):
+            return result.to_string(index=False)
+        
+        # Default
+        return str(result)
+    
+    def _get_dataset_context(self):
+        """Get comprehensive dataset context for LLM"""
+        columns_info = ", ".join(self.df.columns.tolist())
+        data_types = self.df.dtypes.to_dict()
+        sample_data = self.df.head(10).to_string()
+        numeric_cols = self.df.select_dtypes(include=[np.number]).columns.tolist()
+        categorical_cols = self.df.select_dtypes(include=['object']).columns.tolist()
+        
+        stats_info = ""
+        for col in numeric_cols[:5]:
+            stats_info += f"- {col}: min={self.df[col].min():.2f}, max={self.df[col].max():.2f}, mean={self.df[col].mean():.2f}\n"
+        
+        cat_info = ""
+        for col in categorical_cols[:3]:
+            top = self.df[col].value_counts().head(3)
+            cat_info += f"- {col}: {dict(top)}\n"
+        
+        context = f"""
+DATASET INFORMATION:
+- Columns: {columns_info}
+- Numeric Columns: {numeric_cols}
+- Categorical Columns: {categorical_cols}
+- Total Rows: {len(self.df)}
+
+NUMERIC STATISTICS (first 5 columns):
+{stats_info}
+
+CATEGORICAL TOP VALUES (first 3 columns):
+{cat_info}
+
+SAMPLE DATA:
+{sample_data}
+"""
+        return context
+    
+    def _is_simple_question(self, question):
+        """Check if the question is a simple statistic question"""
+        simple_patterns = [
+            "average", "mean", "maximum", "minimum", "highest", "lowest",
+            "total", "sum", "count", "how many", "most frequent", "most common",
+            "median", "standard deviation"
+        ]
+        question_lower = question.lower()
+        # Check if it's asking for a single value (not "for each" or "by")
+        if "for each" in question_lower or " by " in question_lower or " per " in question_lower:
+            return False
+        for pattern in simple_patterns:
+            if pattern in question_lower:
+                return True
+        return False
+    
+    def answer_question(self, question, llm_function=None):
+        """Answer using LLM to understand and generate pandas code"""
+        
         if llm_function:
             try:
-                columns_info = ", ".join(self.df.columns.tolist())
-                sample_data = self.df.head(5).to_string()
+                context = self._get_dataset_context()
                 
                 prompt = f"""
-                You are a data analysis assistant. Answer the following question based on the dataset.
-                
-                Dataset Columns: {columns_info}
-                Sample Data (first 5 rows):
-                {sample_data}
-                
-                Question: {question}
-                
-                Provide a concise answer and a brief explanation.
-                Format: ANSWER: <answer> | EXPLANATION: <explanation>
-                """
+You are an expert data analyst AI. You have a dataset loaded in pandas DataFrame called 'df'.
+
+{context}
+
+USER QUESTION: "{question}"
+
+Your task is to:
+1. UNDERSTAND what the user is asking
+2. WRITE the correct pandas code to answer the question
+3. EXECUTE the code and return the answer
+
+Follow these rules:
+- Use ONLY pandas operations (groupby, mean, max, min, sum, count, value_counts, etc.)
+- Store the final answer in a variable called 'result'
+- Keep the code SIMPLE and EFFICIENT
+- Handle edge cases (empty results, missing columns, etc.)
+
+IMPORTANT: If the result is a Series (like groupby), keep it as a Series.
+The final answer should be stored in 'result'.
+
+EXAMPLE 1: "What is the average age?"
+CODE: result = df['age'].mean()
+
+EXAMPLE 2: "What is the average hours per week for each workclass?"
+CODE: result = df.groupby('workclass')['hours-per-week'].mean()
+
+EXAMPLE 3: "How many people earn more than 50K?"
+CODE: result = len(df[df['income'] == '>50K'])
+
+EXAMPLE 4: "What is the most common occupation?"
+CODE: result = df['occupation'].value_counts().index[0]
+
+Now, generate ONLY the pandas code for this question.
+Do NOT include any explanation, just the code.
+The code should store the answer in a variable called 'result'.
+
+Your response should be ONLY the Python code, nothing else.
+"""
                 
                 llm_response = llm_function(prompt)
                 
                 if llm_response:
-                    if "ANSWER:" in llm_response and "EXPLANATION:" in llm_response:
-                        parts = llm_response.split("EXPLANATION:")
-                        answer_part = parts[0].replace("ANSWER:", "").strip()
-                        explanation_part = parts[1].strip() if len(parts) > 1 else ""
+                    code = llm_response.strip()
+                    
+                    if code.startswith('```python'):
+                        code = code.replace('```python', '').replace('```', '').strip()
+                    elif code.startswith('```'):
+                        code = code.replace('```', '').strip()
+                    
+                    local_vars = {'df': self.df, 'pd': pd, 'np': np}
+                    
+                    try:
+                        exec(code, {}, local_vars)
+                        result = local_vars.get('result')
                         
-                        return {
-                            "answer": answer_part,
-                            "explanation": explanation_part,
-                            "success": True,
-                            "method": "llm"
-                        }
-                    else:
-                        return {
-                            "answer": llm_response[:200],
-                            "explanation": "Generated by AI",
-                            "success": True,
-                            "method": "llm"
-                        }
+                        if result is not None:
+                            formatted_answer = self._format_result(result, question)
+                            
+                            return {
+                                "answer": formatted_answer,
+                                "explanation": "",
+                                "success": True,
+                                "method": "llm_pandas"
+                            }
+                    
+                    except Exception as e:
+                        print(f"Code execution error: {e}")
+                        direct_prompt = f"""
+The user asked: "{question}"
+The dataset has columns: {', '.join(self.df.columns.tolist())}
+The dataset has {len(self.df)} rows.
+
+Please answer the question directly.
+If it's a simple question (average, max, min, count), return a complete sentence.
+If it's a complex question (group by), return the data in a clear format.
+"""
+                        direct_answer = llm_function(direct_prompt)
+                        if direct_answer:
+                            return {
+                                "answer": direct_answer,
+                                "explanation": "",
+                                "success": True,
+                                "method": "llm_direct"
+                            }
+            
             except Exception as e:
-                print(f"LLM fallback error: {e}")
+                print(f"LLM-first approach error: {e}")
         
-        # ================================================================
-        # DEFAULT
-        # ================================================================
+        return self._fallback_answer(question, llm_function)
+    
+    def _fallback_answer(self, question, llm_function=None):
+        """Simple fallback for basic questions"""
+        question_lower = question.lower()
+        
+        try:
+            # Highest / Maximum
+            if "highest" in question_lower or "maximum" in question_lower or "largest" in question_lower:
+                numeric_cols = self.df.select_dtypes(include=[np.number]).columns
+                if len(numeric_cols) > 0:
+                    target_col = None
+                    for col in numeric_cols:
+                        if col.lower() in question_lower:
+                            target_col = col
+                            break
+                    if not target_col:
+                        target_col = numeric_cols[0]
+                    
+                    max_value = self.df[target_col].max()
+                    return {
+                        "answer": f"The maximum {target_col} in the dataset is **{max_value:,.2f}**.",
+                        "explanation": "",
+                        "success": True,
+                        "method": "fallback"
+                    }
+            
+            # Average / Mean
+            if "average" in question_lower or "mean" in question_lower:
+                numeric_cols = self.df.select_dtypes(include=[np.number]).columns
+                if len(numeric_cols) > 0:
+                    target_col = None
+                    for col in numeric_cols:
+                        if col.lower() in question_lower:
+                            target_col = col
+                            break
+                    if not target_col:
+                        target_col = numeric_cols[0]
+                    
+                    avg_value = self.df[target_col].mean()
+                    return {
+                        "answer": f"The average {target_col} in the dataset is **{avg_value:,.2f}**.",
+                        "explanation": "",
+                        "success": True,
+                        "method": "fallback"
+                    }
+            
+            # Most Frequent
+            if "most frequent" in question_lower or "most common" in question_lower:
+                cat_cols = self.df.select_dtypes(include=['object']).columns
+                if len(cat_cols) > 0:
+                    target_col = None
+                    for col in cat_cols:
+                        if col.lower() in question_lower:
+                            target_col = col
+                            break
+                    if not target_col:
+                        target_col = cat_cols[0]
+                    
+                    top_value = self.df[target_col].value_counts().index[0]
+                    top_count = self.df[target_col].value_counts().iloc[0]
+                    return {
+                        "answer": f"The most frequent {target_col} is **{top_value}** with **{top_count}** occurrences.",
+                        "explanation": "",
+                        "success": True,
+                        "method": "fallback"
+                    }
+            
+            # Count
+            if "how many" in question_lower or "count" in question_lower:
+                return {
+                    "answer": f"The dataset contains **{len(self.df)}** total records.",
+                    "explanation": "",
+                    "success": True,
+                    "method": "fallback"
+                }
+        
+        except Exception as e:
+            print(f"Fallback error: {e}")
+        
+        if llm_function:
+            try:
+                direct_prompt = f"""
+The user asked: "{question}"
+Dataset columns: {', '.join(self.df.columns.tolist())}
+Dataset rows: {len(self.df)}
+
+Provide a complete sentence answer.
+"""
+                direct_answer = llm_function(direct_prompt)
+                if direct_answer:
+                    return {
+                        "answer": direct_answer,
+                        "explanation": "",
+                        "success": True,
+                        "method": "llm_fallback"
+                    }
+            except:
+                pass
+        
         return {
             "answer": "I couldn't determine the answer from the dataset.",
             "explanation": "Please rephrase your question or check the dataset columns.",
