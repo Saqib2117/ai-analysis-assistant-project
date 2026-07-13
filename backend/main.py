@@ -282,6 +282,7 @@ async def explain_chart(request: ChartExplanationRequest = None):
         })
     
     try:
+        # Get chart type from request
         chart_type = "Auto"
         if request and request.chart_type:
             chart_type = request.chart_type
@@ -291,36 +292,33 @@ async def explain_chart(request: ChartExplanationRequest = None):
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
         
-        # --- BUILD CHART DATA DESCRIPTION ---
+        # --- BUILD CHART DESCRIPTION BASED ON CHART TYPE ---
         chart_info = ""
         
-        if chart_type == "Histogram" or chart_type == "Auto":
-            if numeric_cols:
-                col = numeric_cols[0]
-                stats = summary.get('numeric_stats', {}).get(col, {})
-                # Get actual distribution data
-                hist_values, bin_edges = np.histogram(df[col].dropna(), bins=10)
-                hist_data = ""
-                for i in range(len(hist_values)):
-                    if i < 5:  # Show top 5 bins
-                        hist_data += f"- {bin_edges[i]:.1f} to {bin_edges[i+1]:.1f}: {hist_values[i]} people\n"
+        # ============================================================
+        # PIE CHART
+        # ============================================================
+        if chart_type == "Pie":
+            if categorical_cols:
+                cat_col = categorical_cols[0]
+                top_5 = df[cat_col].value_counts().head(5)
                 
                 chart_info = f"""
-                CHART TYPE: Histogram
-                COLUMN: {col}
-                TOTAL RECORDS: {len(df)}
-                
-                DISTRIBUTION (Top 5 bins):
-                {hist_data}
-                
-                KEY STATISTICS:
-                - Min: {stats.get('min', 'N/A')}
-                - Max: {stats.get('max', 'N/A')}
-                - Mean: {stats.get('mean', 'N/A'):.2f}
-                - Median: {stats.get('median', 'N/A'):.2f}
-                - Standard Deviation: {stats.get('std', 'N/A'):.2f}
-                """
+CHART TYPE: Pie Chart
+COLUMN: {cat_col}
+TOTAL RECORDS: {len(df)}
+
+DISTRIBUTION:
+"""
+                for cat, count in top_5.items():
+                    pct = (count / len(df)) * 100
+                    chart_info += f"- {cat}: {count} ({pct:.1f}%)\n"
+            else:
+                chart_info = "No categorical column found for Pie Chart."
         
+        # ============================================================
+        # BAR CHART
+        # ============================================================
         elif chart_type == "Bar":
             if categorical_cols and numeric_cols:
                 cat_col = categorical_cols[0]
@@ -328,57 +326,136 @@ async def explain_chart(request: ChartExplanationRequest = None):
                 top_5 = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False).head(5)
                 
                 chart_info = f"""
-                CHART TYPE: Bar Chart
-                X-AXIS: {cat_col}
-                Y-AXIS: {num_col}
-                
-                TOP 5 CATEGORIES:
-                """
+CHART TYPE: Bar Chart
+X-AXIS: {cat_col}
+Y-AXIS: {num_col}
+TOTAL RECORDS: {len(df)}
+
+TOP 5 CATEGORIES:
+"""
                 for cat, val in top_5.items():
                     chart_info += f"- {cat}: {val:,.0f}\n"
+            else:
+                chart_info = "No categorical or numeric columns found for Bar Chart."
         
-        elif chart_type == "Pie":
-            if categorical_cols:
-                cat_col = categorical_cols[0]
-                top_5 = df[cat_col].value_counts().head(5)
+        # ============================================================
+        # HISTOGRAM
+        # ============================================================
+        elif chart_type == "Histogram":
+            if numeric_cols:
+                col = numeric_cols[0]
+                stats = summary.get('numeric_stats', {}).get(col, {})
+                
+                # Get actual distribution data
+                hist_values, bin_edges = np.histogram(df[col].dropna(), bins=10)
+                hist_data = ""
+                for i in range(len(hist_values)):
+                    hist_data += f"- {bin_edges[i]:.1f} to {bin_edges[i+1]:.1f}: {hist_values[i]} people\n"
                 
                 chart_info = f"""
-                CHART TYPE: Pie Chart
-                COLUMN: {cat_col}
-                
-                TOP 5 CATEGORIES:
-                """
-                for cat, count in top_5.items():
-                    pct = (count / len(df)) * 100
-                    chart_info += f"- {cat}: {count} ({pct:.1f}%)\n"
+CHART TYPE: Histogram
+COLUMN: {col}
+TOTAL RECORDS: {len(df)}
+
+DISTRIBUTION:
+{hist_data}
+
+KEY STATISTICS:
+- Min: {stats.get('min', 'N/A')}
+- Max: {stats.get('max', 'N/A')}
+- Mean: {stats.get('mean', 'N/A'):.2f}
+- Median: {stats.get('median', 'N/A'):.2f}
+- Standard Deviation: {stats.get('std', 'N/A'):.2f}
+"""
+            else:
+                chart_info = "No numeric column found for Histogram."
         
+        # ============================================================
+        # SCATTER PLOT
+        # ============================================================
         elif chart_type == "Scatter":
             if len(numeric_cols) >= 2:
                 col1 = numeric_cols[0]
                 col2 = numeric_cols[1]
                 chart_info = f"""
-                CHART TYPE: Scatter Plot
-                X-AXIS: {col1}
-                Y-AXIS: {col2}
-                TOTAL POINTS: {len(df)}
+CHART TYPE: Scatter Plot
+X-AXIS: {col1}
+Y-AXIS: {col2}
+TOTAL POINTS: {len(df)}
+
+KEY STATISTICS:
+- {col1} - Min: {df[col1].min():.2f}, Max: {df[col1].max():.2f}, Mean: {df[col1].mean():.2f}
+- {col2} - Min: {df[col2].min():.2f}, Max: {df[col2].max():.2f}, Mean: {df[col2].mean():.2f}
+"""
+            else:
+                chart_info = "Need at least 2 numeric columns for Scatter Plot."
+        
+        # ============================================================
+        # AUTO (Default)
+        # ============================================================
+        else:
+            # Auto-detect best chart type
+            if len(categorical_cols) >= 1 and len(numeric_cols) >= 1:
+                cat_col = categorical_cols[0]
+                num_col = numeric_cols[0]
+                top_5 = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False).head(5)
                 
-                KEY STATISTICS:
-                - {col1} - Min: {df[col1].min():.2f}, Max: {df[col1].max():.2f}, Mean: {df[col1].mean():.2f}
-                - {col2} - Min: {df[col2].min():.2f}, Max: {df[col2].max():.2f}, Mean: {df[col2].mean():.2f}
-                """
+                chart_info = f"""
+CHART TYPE: Auto (Bar Chart)
+X-AXIS: {cat_col}
+Y-AXIS: {num_col}
+TOTAL RECORDS: {len(df)}
+
+TOP 5 CATEGORIES:
+"""
+                for cat, val in top_5.items():
+                    chart_info += f"- {cat}: {val:,.0f}\n"
+            elif len(categorical_cols) >= 1:
+                cat_col = categorical_cols[0]
+                top_5 = df[cat_col].value_counts().head(5)
+                
+                chart_info = f"""
+CHART TYPE: Auto (Pie Chart)
+COLUMN: {cat_col}
+TOTAL RECORDS: {len(df)}
+
+DISTRIBUTION:
+"""
+                for cat, count in top_5.items():
+                    pct = (count / len(df)) * 100
+                    chart_info += f"- {cat}: {count} ({pct:.1f}%)\n"
+            elif len(numeric_cols) >= 1:
+                col = numeric_cols[0]
+                stats = summary.get('numeric_stats', {}).get(col, {})
+                chart_info = f"""
+CHART TYPE: Auto (Histogram)
+COLUMN: {col}
+TOTAL RECORDS: {len(df)}
+
+KEY STATISTICS:
+- Min: {stats.get('min', 'N/A')}
+- Max: {stats.get('max', 'N/A')}
+- Mean: {stats.get('mean', 'N/A'):.2f}
+- Median: {stats.get('median', 'N/A'):.2f}
+"""
+            else:
+                chart_info = "No suitable data found for chart."
         
+        # ============================================================
+        # BUILD PROMPT
+        # ============================================================
         prompt = f"""
-        You are a data analysis expert. Analyze this chart and explain what it shows.
-        
-        {chart_info}
-        
-        Please provide:
-        1. What this chart shows in simple terms (1-2 sentences)
-        2. The most prominent observation from this chart (1 sentence)
-        3. One key insight from this chart (1 sentence)
-        
-        Keep it short and focused ONLY on the chart.
-        """
+You are a data analysis expert. Analyze this chart and explain what it shows.
+
+{chart_info}
+
+Please provide:
+1. What this chart shows in simple terms (1-2 sentences)
+2. The most prominent observation from this chart (1 sentence)
+3. One key insight from this chart (1 sentence)
+
+Keep it short and focused ONLY on the chart.
+"""
         
         llm_response = call_llm(prompt)
         
