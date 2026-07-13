@@ -208,6 +208,26 @@ async def ask_question(request: QuestionRequest):
     result["llm_provider"] = LLM_PROVIDER
     return JSONResponse(result)
 
+@app.get("/full-dataset")
+async def get_full_dataset():
+    """Get the full dataset for preview"""
+    if not analyzer.is_loaded:
+        raise HTTPException(status_code=400, detail="No data loaded")
+    
+    try:
+        # Convert the entire dataframe to dict
+        df_dict = analyzer.df.to_dict('records')
+        columns = analyzer.df.columns.tolist()
+        
+        return JSONResponse({
+            "success": True,
+            "data": df_dict,
+            "columns": columns,
+            "rows": len(df_dict)
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/chart")
 async def get_chart():
     """Generate and return a chart"""

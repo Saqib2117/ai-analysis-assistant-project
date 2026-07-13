@@ -6,6 +6,7 @@ Deploy on Streamlit Cloud
 import streamlit as st
 import requests
 import pandas as pd
+import numpy as np
 import os
 from datetime import datetime
 import re
@@ -390,7 +391,7 @@ st.markdown("""
 # SESSION STATE
 # ================================================================
 
-BASE_URL = "https://saqib21-fastapi-backend.hf.space"
+BASE_URL = "http://127.0.0.1:8000"
 
 if "api_url" not in st.session_state:
     st.session_state.api_url = BASE_URL
@@ -424,6 +425,51 @@ def clean_markdown(text):
     text = text.replace('**', '')
     text = ' '.join(text.split())
     return text
+
+def update_summary_after_cleaning(df):
+    """Update the summary after cleaning"""
+    try:
+        # Calculate new summary
+        new_summary = {
+            "total_rows": len(df),
+            "total_columns": len(df.columns),
+            "column_names": df.columns.tolist(),
+            "data_types": df.dtypes.astype(str).to_dict(),
+            "missing_values": df.isnull().sum().to_dict(),
+            "missing_percentage": (df.isnull().sum() / len(df) * 100).round(2).to_dict(),
+            "duplicate_rows": df.duplicated().sum(),
+        }
+        
+        # Numeric statistics
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        if len(numeric_cols) > 0:
+            new_summary["numeric_stats"] = {}
+            for col in numeric_cols:
+                new_summary["numeric_stats"][col] = {
+                    "min": float(df[col].min()),
+                    "max": float(df[col].max()),
+                    "mean": float(df[col].mean()),
+                    "median": float(df[col].median()),
+                    "std": float(df[col].std()),
+                }
+        
+        # Categorical statistics
+        categorical_cols = df.select_dtypes(include=['object']).columns
+        if len(categorical_cols) > 0:
+            new_summary["categorical_stats"] = {}
+            for col in categorical_cols:
+                new_summary["categorical_stats"][col] = {
+                    "unique_values": int(df[col].nunique()),
+                    "top_values": df[col].value_counts().head(5).to_dict(),
+                }
+        
+        # Update session state
+        st.session_state.summary = new_summary
+        
+        return True
+    except Exception as e:
+        print(f"Error updating summary: {e}")
+        return False
 
 def format_answer_display(answer_text, explanation=""):
     """Format answer with proper styling - FIXED TABLE HANDLING"""
@@ -670,8 +716,12 @@ else:
     
     st.markdown('<div class="section-spacing"></div>', unsafe_allow_html=True)
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    # ===== TAB ORDER: Dashboard → Preview Dataset → Data Cleaning → Statistics → Q&A → Charts → AI Explain → Export =====
+    tab1, tab6, tab7, tab8, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 Dashboard",
+        "🔍 Preview Dataset",
+        "🧹 Data Cleaning",
+        "📊 Statistics & Insights", 
         "💬 Q&A",
         "📈 Charts",
         "🤖 AI Explain",
@@ -717,6 +767,154 @@ else:
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error: {str(e)}")
+    
+    # ================================================================
+    # TAB 6: Preview Dataset
+    # ================================================================
+
+    with tab6:
+        st.subheader("📊 Dataset Preview")
+        
+        if st.session_state.data_loaded:
+            try:
+                # Get dataset info
+                response = requests.get(f"{st.session_state.api_url}/info")
+                if response.status_code == 200:
+                    data = response.json()
+                    info = data.get('info', {})
+                    
+                    # Get summary for duplicates and missing values
+                    summary = st.session_state.summary
+                    
+                    # Display basic info
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("📋 Total Rows", info.get('shape', [0, 0])[0])
+                    with col2:
+                        st.metric("📑 Total Columns", info.get('shape', [0, 0])[1])
+                    with col3:
+                        duplicates = summary.get('duplicate_rows', 0) if summary else 0
+                        st.metric("🔄 Duplicate Rows", f"{duplicates:,}")
+                    with col4:
+                        missing = sum(summary.get('missing_values', {}).values()) if summary else 0
+                        st.metric("⚠️ Missing Values", f"{missing:,}")
+                    
+                    st.divider()
+                    
+                    # --- SEARCH COLUMNS WITH DATA PREVIEW ---
+                    st.subheader("🔍 Search Columns")
+                    col_search = st.text_input("Search column names", placeholder="Type column name to search...")
+                    
+                    # Display columns
+                    columns = info.get('columns', [])
+                    
+                    # --- GET FULL DATASET FOR PREVIEW ---
+                    try:
+                        response_full = requests.get(f"{st.session_state.api_url}/full-dataset")
+                        if response_full.status_code == 200:
+                            full_data = response_full.json()
+                            df_full = pd.DataFrame(full_data.get('data', []))
+                            
+                            if not df_full.empty:
+                                
+                                # ================================================================
+                                # IF SEARCH IS ACTIVE - SHOW COLUMN DATA PREVIEW
+                                # ================================================================
+                                if col_search:
+                                    filtered_cols = [col for col in columns if col_search.lower() in col.lower()]
+                                    
+                                    if filtered_cols:
+                                        st.success(f"✅ Found {len(filtered_cols)} column(s) matching '{col_search}'")
+                                        
+                                        for col in filtered_cols:
+                                            with st.expander(f"📊 Column: `{col}`", expanded=True):
+                                                # Get column data
+                                                col_data = df_full[col]
+                                                col_type = col_data.dtype
+                                                unique_count = col_data.nunique()
+                                                null_count = col_data.isnull().sum()
+                                                
+                                                # Column stats
+                                                c1, c2, c3 = st.columns(3)
+                                                with c1:
+                                                    st.metric("📋 Data Type", str(col_type))
+                                                with c2:
+                                                    st.metric("🔢 Unique Values", unique_count)
+                                                with c3:
+                                                    st.metric("⚠️ Null Values", null_count)
+                                                
+                                                # --- FIX: Show first 10 values with Index first ---
+                                                st.write("**First 10 values:**")
+                                                
+                                                # Create a clean display of first 10 values
+                                                first_10 = col_data.head(10).reset_index(drop=True)
+                                                
+                                                # Display as a simple table with Index column first
+                                                display_df = pd.DataFrame({
+                                                    'Index': first_10.index,
+                                                    'Value': first_10.values
+                                                })
+                                                # Reorder columns to put Index first
+                                                display_df = display_df[['Index', 'Value']]
+                                                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                                                
+                                                # --- Show value counts for categorical columns ---
+                                                if col_type == 'object' or col_type.name == 'category' or col_type == 'str':
+                                                    st.write("**Top 5 Most Frequent Values:**")
+                                                    value_counts = col_data.value_counts().head(5)
+                                                    for val, count in value_counts.items():
+                                                        pct = (count / len(col_data)) * 100
+                                                        st.write(f"• `{val}`: {count:,} ({pct:.1f}%)")
+                                                
+                                                st.divider()
+                                    else:
+                                        st.warning(f"❌ No columns found matching '{col_search}'")
+                                        
+                                        # Show similar columns suggestion
+                                        suggestions = [col for col in columns if any(word in col.lower() for word in col_search.lower().split())]
+                                        if suggestions:
+                                            st.write("**Did you mean?**")
+                                            for col in suggestions[:5]:
+                                                st.markdown(f"• `{col}`")
+                                
+                                # ================================================================
+                                # IF NO SEARCH - SHOW FULL PREVIEW
+                                # ================================================================
+                                else:
+                                    # Show column list
+                                    st.write(f"**{len(columns)} columns:**")
+                                    cols_per_row = 4
+                                    for i in range(0, len(columns), cols_per_row):
+                                        row_cols = st.columns(cols_per_row)
+                                        for j, col in enumerate(columns[i:i+cols_per_row]):
+                                            with row_cols[j]:
+                                                st.markdown(f"• `{col}`")
+                                    
+                                    st.divider()
+                                    
+                                    # First 5 rows
+                                    st.subheader("📄 First 5 Rows")
+                                    st.dataframe(df_full.head(5), use_container_width=True)
+                                    
+                                    st.divider()
+                                    
+                                    # Last 5 rows
+                                    st.subheader("📄 Last 5 Rows")
+                                    st.dataframe(df_full.tail(5), use_container_width=True)
+                            else:
+                                st.info("No data available to preview")
+                        else:
+                            st.error("Could not fetch full dataset for preview")
+                    except Exception as e:
+                        st.error(f"Error loading dataset: {str(e)}")
+                        
+                else:
+                    st.error("Could not fetch dataset info")
+                    
+            except Exception as e:
+                st.error(f"Error loading dataset preview: {str(e)}")
+        else:
+            st.info("Please upload a dataset first to preview.")
     
     # ================================================================
     # TAB 2: Q&A
@@ -978,6 +1176,614 @@ else:
         with col2:
             if st.button("📋 Export Summary (JSON)", use_container_width=True):
                 st.json(st.session_state.summary)
+    
+    # ================================================================
+    # TAB 7: Data Cleaning & Info
+    # ================================================================
+
+    with tab7:
+        st.subheader("🧹 Data Cleaning & Info")
+        
+        if not st.session_state.data_loaded:
+            st.info("Please upload a dataset first to access data cleaning features.")
+        else:
+            # Initialize cleaning session state
+            if 'cleaned_df' not in st.session_state:
+                st.session_state.cleaned_df = None
+            if 'cleaning_applied' not in st.session_state:
+                st.session_state.cleaning_applied = False
+            if 'cleaning_message' not in st.session_state:
+                st.session_state.cleaning_message = ""
+            
+            # Get current dataframe (original or cleaned)
+            try:
+                # Always fetch from backend for original data
+                response = requests.get(f"{st.session_state.api_url}/full-dataset")
+                if response.status_code == 200:
+                    full_data = response.json()
+                    original_df = pd.DataFrame(full_data.get('data', []))
+                    
+                    # Use cleaned data if available, otherwise use original
+                    if st.session_state.cleaned_df is not None:
+                        df = st.session_state.cleaned_df
+                        is_cleaned = True
+                    else:
+                        df = original_df
+                        is_cleaned = False
+                    
+                    # ============================================================
+                    # SECTION 1: DATA INFORMATION
+                    # ============================================================
+                    st.subheader("📊 Data Information")
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    # Get data info
+                    rows, cols = df.shape
+                    duplicates = df.duplicated().sum()
+                    missing = df.isnull().sum().sum()
+                    memory = df.memory_usage(deep=True).sum() / 1024 / 1024  # MB
+                    
+                    # Detect numeric and categorical columns
+                    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                    categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+                    
+                    with col1:
+                        st.metric("📋 Rows", f"{rows:,}")
+                    with col2:
+                        st.metric("📑 Columns", cols)
+                    with col3:
+                        st.metric("🔄 Duplicates", f"{duplicates:,}")
+                    with col4:
+                        st.metric("⚠️ Missing Values", f"{missing:,}")
+                    
+                    # Additional info
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("🔢 Numeric Columns", len(numeric_cols))
+                    with col2:
+                        st.metric("📝 Categorical Columns", len(categorical_cols))
+                    with col3:
+                        st.metric("💾 Memory Usage", f"{memory:.2f} MB")
+                    
+                    # Show cleaned status badge
+                    if is_cleaned:
+                        st.success("✅ **Currently viewing CLEANED data**")
+                    else:
+                        st.info("ℹ️ **Viewing ORIGINAL data**")
+                    
+                    st.divider()
+                    
+                    # ============================================================
+                    # SECTION 2: MISSING VALUES DETAIL
+                    # ============================================================
+                    st.subheader("🔍 Missing Values by Column")
+                    
+                    missing_data = df.isnull().sum()
+                    missing_data = missing_data[missing_data > 0]
+                    
+                    if len(missing_data) > 0:
+                        missing_df = pd.DataFrame({
+                            'Column': missing_data.index,
+                            'Missing Values': missing_data.values,
+                            'Percentage': (missing_data.values / len(df) * 100).round(2)
+                        })
+                        st.dataframe(missing_df, use_container_width=True)
+                    else:
+                        st.success("✅ No missing values found in the dataset!")
+                    
+                    st.divider()
+                    
+                    # ============================================================
+                    # SECTION 3: DATA QUALITY DETECTION
+                    # ============================================================
+                    st.subheader("🔎 Data Quality Detection")
+                    
+                    quality_issues = []
+                    
+                    # Check for duplicates
+                    if duplicates > 0:
+                        quality_issues.append(f"🔄 {duplicates:,} duplicate rows found")
+                    
+                    # Check for missing values
+                    if missing > 0:
+                        quality_issues.append(f"⚠️ {missing:,} missing values found")
+                    
+                    # Check for empty strings
+                    empty_count = 0
+                    for col in df.select_dtypes(include=['object']).columns:
+                        empty_count += (df[col] == '').sum()
+                    if empty_count > 0:
+                        quality_issues.append(f"📭 {empty_count:,} empty strings found")
+                    
+                    # Check for whitespace issues
+                    whitespace_count = 0
+                    for col in df.select_dtypes(include=['object']).columns:
+                        whitespace_count += df[col].astype(str).str.strip().eq('').sum()
+                    if whitespace_count > 0:
+                        quality_issues.append(f"🔤 {whitespace_count:,} whitespace issues found")
+                    
+                    if quality_issues:
+                        for issue in quality_issues:
+                            st.warning(issue)
+                    else:
+                        st.success("✅ Data quality looks good! No issues detected.")
+                    
+                    st.divider()
+                    
+                    # ============================================================
+                    # SECTION 4: CLEANING OPTIONS
+                    # ============================================================
+                    st.subheader("🛠️ Cleaning Options")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        remove_duplicates = st.checkbox("🗑️ Remove duplicate records")
+                        remove_empty = st.checkbox("📭 Remove empty records")
+                        trim_whitespace = st.checkbox("✂️ Trim whitespace from text columns")
+                    
+                    with col2:
+                        fill_missing = st.checkbox("📊 Fill missing values")
+                        if fill_missing:
+                            fill_strategy = st.selectbox(
+                                "Fill strategy:",
+                                ["Auto", "Mean", "Median", "Mode", "Forward Fill", "Backward Fill", "Custom Value"]
+                            )
+                            if fill_strategy == "Custom Value":
+                                custom_value = st.text_input("Enter custom value:", "0")
+                        else:
+                            fill_strategy = "None"
+                        
+                        detect_dates = st.checkbox("📅 Convert date columns")
+                    
+                    # Apply cleaning button
+                    st.divider()
+                    col1, col2, col3 = st.columns([2, 1, 2])
+                    with col2:
+                        apply_cleaning = st.button("✅ Apply Cleaning", use_container_width=True, type="primary")
+                        reset_data = st.button("🔄 Reset to Original", use_container_width=True)
+                    
+                    # ============================================================
+                    # SECTION 5: APPLY CLEANING
+                    # ============================================================
+                    if apply_cleaning:
+                        try:
+                            cleaned_df = df.copy()
+                            cleaning_steps = []
+                            
+                            # 1. Remove duplicates
+                            if remove_duplicates:
+                                before = len(cleaned_df)
+                                cleaned_df = cleaned_df.drop_duplicates()
+                                after = len(cleaned_df)
+                                cleaning_steps.append(f"Removed {before - after} duplicate rows")
+                            
+                            # 2. Remove empty records
+                            if remove_empty:
+                                before = len(cleaned_df)
+                                cleaned_df = cleaned_df.dropna(how='all')
+                                after = len(cleaned_df)
+                                cleaning_steps.append(f"Removed {before - after} empty rows")
+                            
+                            # 3. Trim whitespace
+                            if trim_whitespace:
+                                for col in cleaned_df.select_dtypes(include=['object']).columns:
+                                    cleaned_df[col] = cleaned_df[col].astype(str).str.strip()
+                                cleaning_steps.append("Trimmed whitespace from text columns")
+                            
+                            # 4. Fill missing values
+                            if fill_missing:
+                                if fill_strategy == "Auto":
+                                    for col in cleaned_df.columns:
+                                        if cleaned_df[col].isnull().sum() > 0:
+                                            if pd.api.types.is_numeric_dtype(cleaned_df[col]):
+                                                cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mean())
+                                            else:
+                                                cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mode()[0] if not cleaned_df[col].mode().empty else "Unknown")
+                                    cleaning_steps.append("Filled missing values using Auto strategy")
+                                elif fill_strategy == "Mean":
+                                    for col in cleaned_df.select_dtypes(include=[np.number]).columns:
+                                        cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mean())
+                                    cleaning_steps.append("Filled missing values using Mean strategy")
+                                elif fill_strategy == "Median":
+                                    for col in cleaned_df.select_dtypes(include=[np.number]).columns:
+                                        cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].median())
+                                    cleaning_steps.append("Filled missing values using Median strategy")
+                                elif fill_strategy == "Mode":
+                                    for col in cleaned_df.columns:
+                                        if cleaned_df[col].isnull().sum() > 0:
+                                            mode_val = cleaned_df[col].mode()[0] if not cleaned_df[col].mode().empty else "Unknown"
+                                            cleaned_df[col] = cleaned_df[col].fillna(mode_val)
+                                    cleaning_steps.append("Filled missing values using Mode strategy")
+                                elif fill_strategy == "Forward Fill":
+                                    cleaned_df = cleaned_df.fillna(method='ffill')
+                                    cleaning_steps.append("Filled missing values using Forward Fill strategy")
+                                elif fill_strategy == "Backward Fill":
+                                    cleaned_df = cleaned_df.fillna(method='bfill')
+                                    cleaning_steps.append("Filled missing values using Backward Fill strategy")
+                                elif fill_strategy == "Custom Value":
+                                    cleaned_df = cleaned_df.fillna(custom_value)
+                                    cleaning_steps.append(f"Filled missing values with custom value: {custom_value}")
+                            
+                            # 5. Convert date columns
+                            if detect_dates:
+                                date_cols_detected = []
+                                for col in cleaned_df.columns:
+                                    if cleaned_df[col].dtype == 'object':
+                                        try:
+                                            pd.to_datetime(cleaned_df[col])
+                                            cleaned_df[col] = pd.to_datetime(cleaned_df[col])
+                                            date_cols_detected.append(col)
+                                        except:
+                                            pass
+                                if date_cols_detected:
+                                    cleaning_steps.append(f"Converted {len(date_cols_detected)} columns to date: {', '.join(date_cols_detected)}")
+                                else:
+                                    cleaning_steps.append("No date columns detected")
+                            
+                            # Store cleaned data
+                            st.session_state.cleaned_df = cleaned_df
+                            st.session_state.cleaning_applied = True
+                            st.session_state.cleaning_message = f"✅ Data cleaned successfully! {len(cleaning_steps)} operations applied."
+                            
+                            # Update summary after cleaning
+                            update_summary_after_cleaning(cleaned_df)
+                            
+                            # Show success message (ONLY ONE)
+                            st.success(st.session_state.cleaning_message)
+                            for step in cleaning_steps:
+                                st.write(f"• {step}")
+                            
+                            # Rerun to refresh the tab
+                            st.rerun()
+                                
+                        except Exception as e:
+                            st.error(f"❌ Error during cleaning: {str(e)}")
+                    
+                    # ============================================================
+                    # SECTION 6: RESET DATA
+                    # ============================================================
+                    if reset_data:
+                        st.session_state.cleaned_df = None
+                        st.session_state.cleaning_applied = False
+                        st.session_state.cleaning_message = "🔄 Dataset reset to original"
+                        
+                        # Reset summary to original
+                        try:
+                            response_summary = requests.get(f"{st.session_state.api_url}/summary")
+                            if response_summary.status_code == 200:
+                                data = response_summary.json()
+                                st.session_state.summary = data.get('summary')
+                        except:
+                            pass
+                        
+                        st.success("🔄 Dataset reset to original!")
+                        st.rerun()
+                    
+                    # ============================================================
+                    # SECTION 7: CLEANING STATUS
+                    # ============================================================
+                    st.divider()
+                    st.subheader("📋 Cleaning Status")
+                    
+                    if st.session_state.cleaning_applied:
+                        # Show cleaned vs original comparison
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Original Rows", f"{len(original_df):,}")
+                        with col2:
+                            st.metric("Cleaned Rows", f"{len(st.session_state.cleaned_df):,}")
+                        
+                        # Show difference
+                        diff = len(original_df) - len(st.session_state.cleaned_df)
+                        if diff > 0:
+                            st.success(f"✅ Removed {diff} rows through cleaning")
+                        else:
+                            st.info("ℹ️ No rows removed during cleaning")
+                    else:
+                        st.info("ℹ️ No cleaning applied yet. Use the options above to clean your data.")
+                        
+                else:
+                    st.error("Could not load dataset for cleaning")
+            except Exception as e:
+                st.error(f"Error loading data: {str(e)}")
+
+    # ================================================================
+    # TAB 8: Statistics & Insights
+    # ================================================================
+
+    with tab8:
+        st.subheader("📊 Statistics & Insights")
+        
+        if not st.session_state.data_loaded:
+            st.info("Please upload a dataset first to view statistics.")
+        else:
+            # Get current dataframe
+            response = requests.get(f"{st.session_state.api_url}/full-dataset")
+            if response.status_code == 200:
+                full_data = response.json()
+                df = pd.DataFrame(full_data.get('data', []))
+                
+                # Use cleaned data if available
+                if st.session_state.cleaned_df is not None:
+                    df = st.session_state.cleaned_df
+                
+                # ============================================================
+                # SECTION 1: SUMMARY STATISTICS
+                # ============================================================
+                st.subheader("📋 Summary Statistics")
+                
+                with st.expander("📊 View Full Summary Statistics", expanded=True):
+                    describe_df = df.describe(include='all').T
+                    for col in df.select_dtypes(include=['object']).columns:
+                        if col in describe_df.index:
+                            describe_df.loc[col, 'unique'] = df[col].nunique()
+                            describe_df.loc[col, 'top'] = df[col].mode()[0] if not df[col].mode().empty else ''
+                            describe_df.loc[col, 'freq'] = df[col].value_counts().iloc[0] if len(df[col].value_counts()) > 0 else 0
+                    st.dataframe(describe_df, use_container_width=True)
+                
+                st.divider()
+                
+                # ============================================================
+                # SECTION 2: NUMERIC COLUMNS STATISTICS
+                # ============================================================
+                st.subheader("🔢 Numeric Columns Statistics")
+                
+                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                
+                if numeric_cols:
+                    numeric_stats = []
+                    for col in numeric_cols:
+                        stats = {
+                            'Column': col,
+                            'Count': df[col].count(),
+                            'Missing': df[col].isnull().sum(),
+                            'Mean': df[col].mean(),
+                            'Median': df[col].median(),
+                            'Std': df[col].std(),
+                            'Min': df[col].min(),
+                            'Max': df[col].max(),
+                            'Q1': df[col].quantile(0.25),
+                            'Q3': df[col].quantile(0.75),
+                            'Skew': df[col].skew(),
+                            'Kurtosis': df[col].kurtosis()
+                        }
+                        numeric_stats.append(stats)
+                    stats_df = pd.DataFrame(numeric_stats)
+                    st.dataframe(stats_df.round(2), use_container_width=True)
+                else:
+                    st.info("No numeric columns found in the dataset.")
+                
+                st.divider()
+                
+                # ============================================================
+                # SECTION 3: CATEGORICAL COLUMNS STATISTICS
+                # ============================================================
+                st.subheader("📝 Categorical Columns Statistics")
+                
+                categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+                
+                if categorical_cols:
+                    for col in categorical_cols[:5]:
+                        with st.expander(f"📊 {col}", expanded=False):
+                            value_counts = df[col].value_counts()
+                            total = len(df)
+                            cat_df = pd.DataFrame({
+                                'Value': value_counts.index,
+                                'Count': value_counts.values,
+                                'Percentage': (value_counts.values / total * 100).round(2)
+                            })
+                            st.dataframe(cat_df.head(10), use_container_width=True)
+                            st.write(f"**Total categories:** {len(value_counts)}")
+                            st.write(f"**Most common:** '{value_counts.index[0]}' ({value_counts.iloc[0]} occurrences, {(value_counts.iloc[0]/total*100):.1f}%)")
+                    
+                    if len(categorical_cols) > 5:
+                        st.info(f"Showing 5 of {len(categorical_cols)} categorical columns.")
+                else:
+                    st.info("No categorical columns found in the dataset.")
+                
+                st.divider()
+                
+                # ============================================================
+                # SECTION 4: OUTLIER DETECTION (IQR Method)
+                # ============================================================
+                st.subheader("📊 Outlier Detection (IQR Method)")
+
+                if numeric_cols:
+                    outlier_results = []
+                    outlier_data = {}
+                    
+                    for col in numeric_cols:
+                        Q1 = df[col].quantile(0.25)
+                        Q3 = df[col].quantile(0.75)
+                        IQR = Q3 - Q1
+                        lower_bound = Q1 - 1.5 * IQR
+                        upper_bound = Q3 + 1.5 * IQR
+                        outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
+                        
+                        outlier_results.append({
+                            'Column': col,
+                            'Q1': Q1,
+                            'Q3': Q3,
+                            'IQR': IQR,
+                            'Lower Bound': lower_bound,
+                            'Upper Bound': upper_bound,
+                            'Outliers Count': len(outliers),
+                            'Outlier %': round((len(outliers) / len(df) * 100), 2)
+                        })
+                        
+                        if len(outliers) > 0:
+                            outlier_data[col] = {
+                                'values': outliers[col].tolist()[:20],
+                                'count': len(outliers),
+                                'lower_bound': lower_bound,
+                                'upper_bound': upper_bound
+                            }
+                    
+                    outlier_df = pd.DataFrame(outlier_results)
+                    st.dataframe(outlier_df.round(2), use_container_width=True)
+                    
+                    columns_with_outliers = outlier_df[outlier_df['Outliers Count'] > 0]
+                    
+                    if len(columns_with_outliers) > 0:
+                        st.warning(f"⚠️ {len(columns_with_outliers)} columns have outliers detected.")
+                        st.subheader("🔍 Outlier Details Showcase")
+                        
+                        for idx, row in columns_with_outliers.iterrows():
+                            col = row['Column']
+                            outliers_count = int(row['Outliers Count'])
+                            lower = row['Lower Bound']
+                            upper = row['Upper Bound']
+                            
+                            with st.expander(f"📊 {col} - {outliers_count} outliers found", expanded=False):
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("📉 Lower Bound", f"{lower:.2f}")
+                                with col2:
+                                    st.metric("📈 Upper Bound", f"{upper:.2f}")
+                                with col3:
+                                    st.metric("🔢 Outlier Count", outliers_count)
+                                
+                                if col in outlier_data:
+                                    values = outlier_data[col]['values']
+                                    outlier_vals_df = pd.DataFrame({
+                                        'Outlier Value': values[:10],
+                                        'Status': ['⚠️ Outlier'] * len(values[:10])
+                                    })
+                                    st.write(f"**First 10 outlier values in `{col}`:**")
+                                    st.dataframe(outlier_vals_df, use_container_width=True, hide_index=True)
+                                    if len(values) > 10:
+                                        st.write(f"... and {len(values) - 10} more outliers")
+                                    st.write(f"**Range of outliers:** {min(values):.2f} to {max(values):.2f}")
+                                    outlier_pct = (outliers_count / len(df)) * 100
+                                    st.write(f"**Percentage of data:** {outlier_pct:.2f}%")
+                    else:
+                        st.success("✅ No outliers detected in any numeric column.")
+                else:
+                    st.info("No numeric columns to detect outliers.")
+                
+                # ============================================================
+                # SECTION 5: AI-GENERATED INSIGHTS
+                # ============================================================
+                st.subheader("🤖 AI-Generated Insights")
+                
+                if st.button("📊 Generate Insights from Data", use_container_width=True):
+                    with st.spinner("🤖 AI is analyzing your data..."):
+                        try:
+                            response = requests.post(f"{st.session_state.api_url}/explain-data")
+                            if response.status_code == 200:
+                                result = response.json()
+                                if result.get('success'):
+                                    st.markdown(f"""
+                                    <div class="ai-box">
+                                        <h4>📊 Data Insights</h4>
+                                        <p style="font-size: 1.05rem; line-height: 1.8;">{result.get('explanation', 'No insights generated')}</p>
+                                        <p style="font-size: 0.85rem; margin-top: 0.5rem; opacity: 0.8;">
+                                            Powered by {result.get('llm_provider', 'AI')}
+                                        </p>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                    st.session_state.insights = result.get('explanation', '')
+                                else:
+                                    st.info("💡 " + result.get('explanation', 'AI insights not available.'))
+                            else:
+                                st.error(f"Error: {response.text}")
+                        except Exception as e:
+                            st.error(f"Error: {str(e)}")
+                
+                # ============================================================
+                # SECTION 6: EXECUTIVE SUMMARY
+                # ============================================================
+                st.divider()
+                st.subheader("📄 Executive Summary")
+
+                if st.button("📊 Generate Executive Summary", use_container_width=True):
+                    with st.spinner("Generating executive summary..."):
+                        # Get cleaned data
+                        if st.session_state.cleaned_df is not None:
+                            df_clean = st.session_state.cleaned_df
+                        else:
+                            response = requests.get(f"{st.session_state.api_url}/full-dataset")
+                            if response.status_code == 200:
+                                full_data = response.json()
+                                df_clean = pd.DataFrame(full_data.get('data', []))
+                            else:
+                                df_clean = df
+                        
+                        # Build detailed executive summary
+                        summary = f"""
+# 📊 Executive Summary Report
+
+## 1. Dataset Overview
+- **Total Records:** {len(df_clean):,}
+- **Total Columns:** {len(df_clean.columns)}
+- **Numeric Columns:** {len(df_clean.select_dtypes(include=[np.number]).columns)}
+- **Categorical Columns:** {len(df_clean.select_dtypes(include=['object']).columns)}
+- **Memory Usage:** {df_clean.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB
+
+## 2. Data Quality Metrics
+- **Duplicate Rows:** {df_clean.duplicated().sum():,} 
+- **Missing Values:** {df_clean.isnull().sum().sum():,}
+
+## 3. Numeric Columns Statistics
+"""
+                        numeric_cols = df_clean.select_dtypes(include=[np.number]).columns.tolist()
+                        for col in numeric_cols:
+                            summary += f"""
+### {col}
+- **Mean:** {df_clean[col].mean():.2f}
+- **Median:** {df_clean[col].median():.2f}
+- **Min:** {df_clean[col].min():.2f}
+- **Max:** {df_clean[col].max():.2f}
+- **Std Dev:** {df_clean[col].std():.2f}
+"""
+                        
+                        summary += "\n## 4. Categorical Columns Distribution\n"
+                        categorical_cols = df_clean.select_dtypes(include=['object']).columns.tolist()
+                        for col in categorical_cols[:5]:
+                            if len(df_clean[col].value_counts()) > 0:
+                                top = df_clean[col].value_counts().index[0]
+                                top_count = df_clean[col].value_counts().iloc[0]
+                                top_pct = (top_count / len(df_clean) * 100)
+                                summary += f"""
+### {col}
+- **Most Common:** {top}
+- **Count:** {top_count:,} ({top_pct:.1f}%)
+- **Total Categories:** {df_clean[col].nunique()}
+"""
+                        
+                        if hasattr(st.session_state, 'insights') and st.session_state.insights:
+                            summary += f"""
+## 5. AI-Generated Insights
+{st.session_state.insights}
+"""
+                        
+                        summary += f"""
+## 6. Outlier Detection Summary
+- **Method Used:** IQR (Interquartile Range)
+- **Threshold:** 1.5 × IQR
+
+---
+*Report generated by AI Data Analysis Assistant on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
+"""
+                        
+                        st.markdown(summary, unsafe_allow_html=True)
+                        
+                        st.divider()
+                        
+                        # Centered Download Button
+                        col1, col2, col3 = st.columns([1, 2, 1])
+                        with col2:
+                            st.download_button(
+                                label="📥 Download Executive Summary (Markdown)",
+                                data=summary,
+                                file_name=f"executive_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                                mime="text/markdown",
+                                use_container_width=True
+                            )
+            else:
+                st.error("Could not load dataset for statistics")
 
 # ================================================================
 # FOOTER
