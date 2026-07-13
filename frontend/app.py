@@ -691,6 +691,10 @@ else:
     # TAB 2: Q&A
     # ================================================================
 
+    # ================================================================
+# TAB 2: Q&A
+# ================================================================
+
     with tab2:
         st.subheader("💬 Ask Questions About Your Data")
         
@@ -705,6 +709,9 @@ else:
                 answer_text = item['text']
                 explanation = item.get('explanation', '')
                 formatted_display = format_answer_display(answer_text, explanation)
+                
+                # Clean the formatted display to remove any remaining |
+                formatted_display = formatted_display.replace('|', '')
                 
                 st.markdown(f"""
                 <div class="assistant-msg">
