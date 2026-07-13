@@ -50,7 +50,7 @@ class DataAnalyzer:
         if isinstance(result, pd.Series):
             sorted_result = result.sort_values(ascending=False)
             
-            formatted = f"📊 **{clean_question}**\n\n"
+            formatted = f"📊 {clean_question}\n\n"
             formatted += "| Category | Value |\n"
             formatted += "|----------|-------|\n"
             
@@ -65,7 +65,7 @@ class DataAnalyzer:
                 max_idx = sorted_result.idxmax()
                 min_val = sorted_result.min()
                 min_idx = sorted_result.idxmin()
-                formatted += f"\n\n💡 **Highest:** {max_idx} ({max_val:,.2f}) | **Lowest:** {min_idx} ({min_val:,.2f})"
+                formatted += f"\n\n💡 Highest: {max_idx} ({max_val:,.2f}) | Lowest: {min_idx} ({min_val:,.2f})"
             
             return formatted
         
@@ -94,7 +94,7 @@ class DataAnalyzer:
                 if not subject:
                     subject = "value"
             
-            return f"The average {subject} in the dataset is **{result:,.2f}**."
+            return f"The average {subject} in the dataset is {result:,.2f}."
         
         # If result is a string
         elif isinstance(result, str):
@@ -275,7 +275,7 @@ If it's a complex question (group by), return the data in a clear format.
                     
                     max_value = self.df[target_col].max()
                     return {
-                        "answer": f"The maximum {target_col} in the dataset is **{max_value:,.2f}**.",
+                        "answer": f"The maximum {target_col} in the dataset is {max_value:,.2f}.",
                         "explanation": "",
                         "success": True,
                         "method": "fallback"
@@ -295,37 +295,69 @@ If it's a complex question (group by), return the data in a clear format.
                     
                     avg_value = self.df[target_col].mean()
                     return {
-                        "answer": f"The average {target_col} in the dataset is **{avg_value:,.2f}**.",
+                        "answer": f"The average {target_col} in the dataset is {avg_value:,.2f}.",
                         "explanation": "",
                         "success": True,
                         "method": "fallback"
                     }
             
-            # Most Frequent
+            # ================================================================
+            # MOST FREQUENT CATEGORY - IMPROVED VERSION (UPDATED)
+            # ================================================================
             if "most frequent" in question_lower or "most common" in question_lower:
-                cat_cols = self.df.select_dtypes(include=['object']).columns
-                if len(cat_cols) > 0:
-                    target_col = None
-                    for col in cat_cols:
-                        if col.lower() in question_lower:
-                            target_col = col
-                            break
-                    if not target_col:
-                        target_col = cat_cols[0]
-                    
-                    top_value = self.df[target_col].value_counts().index[0]
-                    top_count = self.df[target_col].value_counts().iloc[0]
+                cat_cols = self.df.select_dtypes(include=['object']).columns.tolist()
+                
+                if not cat_cols:
                     return {
-                        "answer": f"The most frequent {target_col} is **{top_value}** with **{top_count}** occurrences.",
+                        "answer": "No categorical columns found in the dataset.",
+                        "explanation": "The dataset only contains numeric data.",
+                        "success": False,
+                        "method": "pandas"
+                    }
+                
+                # Check if user specified a column
+                target_col = None
+                for col in cat_cols:
+                    if col.lower() in question_lower:
+                        target_col = col
+                        break
+                
+                if target_col:
+                    # Answer for specific column
+                    top = self.df[target_col].value_counts().index[0]
+                    count = self.df[target_col].value_counts().iloc[0]
+                    pct = (count / len(self.df)) * 100
+                    return {
+                        "answer": f"The most frequent {target_col} is '{top}' with {count} occurrences ({pct:.1f}%).",
                         "explanation": "",
                         "success": True,
-                        "method": "fallback"
+                        "method": "pandas"
+                    }
+                else:
+                    # List all categorical columns with their most frequent values
+                    result = "Most frequent values by column:\n\n"
+                    for col in cat_cols[:10]:
+                        top = self.df[col].value_counts().index[0]
+                        count = self.df[col].value_counts().iloc[0]
+                        pct = (count / len(self.df)) * 100
+                        result += f"• {col}: {top} ({pct:.1f}%)\n"
+                    
+                    if len(cat_cols) > 10:
+                        result += f"\n... and {len(cat_cols) - 10} more columns"
+                    
+                    result += f"\n\n💡 Tip: Ask 'What is the most frequent [column_name]?' for a specific column."
+                    
+                    return {
+                        "answer": result,
+                        "explanation": "",
+                        "success": True,
+                        "method": "pandas"
                     }
             
             # Count
             if "how many" in question_lower or "count" in question_lower:
                 return {
-                    "answer": f"The dataset contains **{len(self.df)}** total records.",
+                    "answer": f"The dataset contains {len(self.df)} total records.",
                     "explanation": "",
                     "success": True,
                     "method": "fallback"
