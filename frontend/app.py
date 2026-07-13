@@ -414,7 +414,7 @@ if 'last_chart_type' not in st.session_state:
     st.session_state.last_chart_type = "Auto"
 
 # ================================================================
-# HELPER FUNCTIONS
+# HELPER FUNCTIONS - FIXED TABLE FORMATTING
 # ================================================================
 
 def clean_markdown(text):
@@ -426,48 +426,78 @@ def clean_markdown(text):
     return text
 
 def format_answer_display(answer_text, explanation=""):
-    """Format answer with proper styling - NO ** EVER"""
+    """Format answer with proper styling - FIXED TABLE HANDLING"""
     
     clean_explanation = clean_markdown(explanation) if explanation else ""
     
-    if "|" in answer_text and "Category" in answer_text:
+    # Check if it's a table (contains | or has Category/Value pattern)
+    if "|" in answer_text or ("Category" in answer_text and "Value" in answer_text):
         lines = answer_text.split('\n')
         data_lines = []
         insight = ""
         header = ""
+        is_table = False
         
         for line in lines:
             line = line.strip()
             if not line:
                 continue
+            
+            # Clean the header
             if line.startswith("📊"):
                 header = line.replace("📊", "").strip()
                 header = clean_markdown(header)
+                is_table = True
             elif "|" in line and "Category" in line:
+                is_table = True
                 continue
             elif "|" in line and "---" in line:
                 continue
             elif "|" in line:
+                # Data row with | separator
+                is_table = True
                 clean_line = clean_markdown(line)
-                data_lines.append(clean_line)
+                clean_line = clean_line.replace('|', '').strip()
+                if clean_line:
+                    data_lines.append(clean_line)
             elif "💡" in line:
                 insight = line.replace("💡", "").strip()
                 insight = clean_markdown(insight)
                 insight = insight.replace("|", " | ")
+            elif line and "Category" not in line and "Value" not in line:
+                # Check if it's a data row without | (e.g., "Some-college 35.68")
+                parts = line.split()
+                if len(parts) >= 2:
+                    # Check if last part is a number (value)
+                    try:
+                        float(parts[-1])
+                        # It's a data row: category + value
+                        is_table = True
+                        data_lines.append(line)
+                    except ValueError:
+                        # Not a data row, skip
+                        pass
         
         formatted = ""
         if header:
             formatted += f"<strong>{header}</strong><br><br>"
         
-        if data_lines:
+        if data_lines and is_table:
             formatted += "<table>"
             formatted += "<tr><th>Category</th><th>Value</th></tr>"
             for row in data_lines:
+                # Split by space to get category and value
                 parts = row.split()
                 if len(parts) >= 2:
-                    value = parts[-1]
-                    category = " ".join(parts[:-1])
-                    formatted += f"<tr><td>{category}</td><td>{value}</td></tr>"
+                    # Check if last part is a number
+                    try:
+                        value = parts[-1]
+                        # The category is everything except the last part
+                        category = " ".join(parts[:-1])
+                        formatted += f"<tr><td>{category}</td><td>{value}</td></tr>"
+                    except ValueError:
+                        # If not a number, treat the whole line as category
+                        formatted += f"<tr><td>{row}</td><td></td></tr>"
             formatted += "</table>"
         
         if insight:
@@ -479,6 +509,7 @@ def format_answer_display(answer_text, explanation=""):
         return formatted
     
     else:
+        # Simple answer - clean completely
         clean_answer = clean_markdown(answer_text)
         if clean_explanation:
             return f"{clean_answer}<br><small>{clean_explanation}</small>"
@@ -691,10 +722,6 @@ else:
     # TAB 2: Q&A
     # ================================================================
 
-    # ================================================================
-# TAB 2: Q&A
-# ================================================================
-
     with tab2:
         st.subheader("💬 Ask Questions About Your Data")
         
@@ -709,9 +736,6 @@ else:
                 answer_text = item['text']
                 explanation = item.get('explanation', '')
                 formatted_display = format_answer_display(answer_text, explanation)
-                
-                # Clean the formatted display to remove any remaining |
-                formatted_display = formatted_display.replace('|', '')
                 
                 st.markdown(f"""
                 <div class="assistant-msg">
