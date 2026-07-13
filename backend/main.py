@@ -296,30 +296,9 @@ async def explain_chart(request: ChartExplanationRequest = None):
         chart_info = ""
         
         # ============================================================
-        # PIE CHART
-        # ============================================================
-        if chart_type == "Pie":
-            if categorical_cols:
-                cat_col = categorical_cols[0]
-                top_5 = df[cat_col].value_counts().head(5)
-                
-                chart_info = f"""
-CHART TYPE: Pie Chart
-COLUMN: {cat_col}
-TOTAL RECORDS: {len(df)}
-
-DISTRIBUTION:
-"""
-                for cat, count in top_5.items():
-                    pct = (count / len(df)) * 100
-                    chart_info += f"- {cat}: {count} ({pct:.1f}%)\n"
-            else:
-                chart_info = "No categorical column found for Pie Chart."
-        
-        # ============================================================
         # BAR CHART
         # ============================================================
-        elif chart_type == "Bar":
+        if chart_type == "Bar":
             if categorical_cols and numeric_cols:
                 cat_col = categorical_cols[0]
                 num_col = numeric_cols[0]
@@ -339,6 +318,27 @@ TOP 5 CATEGORIES:
                 chart_info = "No categorical or numeric columns found for Bar Chart."
         
         # ============================================================
+        # PIE CHART
+        # ============================================================
+        elif chart_type == "Pie":
+            if categorical_cols:
+                cat_col = categorical_cols[0]
+                top_5 = df[cat_col].value_counts().head(5)
+                
+                chart_info = f"""
+CHART TYPE: Pie Chart
+COLUMN: {cat_col}
+TOTAL RECORDS: {len(df)}
+
+DISTRIBUTION:
+"""
+                for cat, count in top_5.items():
+                    pct = (count / len(df)) * 100
+                    chart_info += f"- {cat}: {count} ({pct:.1f}%)\n"
+            else:
+                chart_info = "No categorical column found for Pie Chart."
+        
+        # ============================================================
         # HISTOGRAM
         # ============================================================
         elif chart_type == "Histogram":
@@ -346,19 +346,10 @@ TOP 5 CATEGORIES:
                 col = numeric_cols[0]
                 stats = summary.get('numeric_stats', {}).get(col, {})
                 
-                # Get actual distribution data
-                hist_values, bin_edges = np.histogram(df[col].dropna(), bins=10)
-                hist_data = ""
-                for i in range(len(hist_values)):
-                    hist_data += f"- {bin_edges[i]:.1f} to {bin_edges[i+1]:.1f}: {hist_values[i]} people\n"
-                
                 chart_info = f"""
 CHART TYPE: Histogram
 COLUMN: {col}
 TOTAL RECORDS: {len(df)}
-
-DISTRIBUTION:
-{hist_data}
 
 KEY STATISTICS:
 - Min: {stats.get('min', 'N/A')}
@@ -384,8 +375,8 @@ Y-AXIS: {col2}
 TOTAL POINTS: {len(df)}
 
 KEY STATISTICS:
-- {col1} - Min: {df[col1].min():.2f}, Max: {df[col1].max():.2f}, Mean: {df[col1].mean():.2f}
-- {col2} - Min: {df[col2].min():.2f}, Max: {df[col2].max():.2f}, Mean: {df[col2].mean():.2f}
+- {col1}: Min={df[col1].min():.2f}, Max={df[col1].max():.2f}, Mean={df[col1].mean():.2f}
+- {col2}: Min={df[col2].min():.2f}, Max={df[col2].max():.2f}, Mean={df[col2].mean():.2f}
 """
             else:
                 chart_info = "Need at least 2 numeric columns for Scatter Plot."
@@ -394,14 +385,13 @@ KEY STATISTICS:
         # AUTO (Default)
         # ============================================================
         else:
-            # Auto-detect best chart type
             if len(categorical_cols) >= 1 and len(numeric_cols) >= 1:
                 cat_col = categorical_cols[0]
                 num_col = numeric_cols[0]
                 top_5 = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False).head(5)
                 
                 chart_info = f"""
-CHART TYPE: Auto (Bar Chart)
+CHART TYPE: Bar Chart (Auto-detected)
 X-AXIS: {cat_col}
 Y-AXIS: {num_col}
 TOTAL RECORDS: {len(df)}
@@ -415,7 +405,7 @@ TOP 5 CATEGORIES:
                 top_5 = df[cat_col].value_counts().head(5)
                 
                 chart_info = f"""
-CHART TYPE: Auto (Pie Chart)
+CHART TYPE: Pie Chart (Auto-detected)
 COLUMN: {cat_col}
 TOTAL RECORDS: {len(df)}
 
@@ -428,7 +418,7 @@ DISTRIBUTION:
                 col = numeric_cols[0]
                 stats = summary.get('numeric_stats', {}).get(col, {})
                 chart_info = f"""
-CHART TYPE: Auto (Histogram)
+CHART TYPE: Histogram (Auto-detected)
 COLUMN: {col}
 TOTAL RECORDS: {len(df)}
 
