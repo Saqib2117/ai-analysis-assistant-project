@@ -599,7 +599,8 @@ with st.sidebar:
     if uploaded_file is not None:
         st.info(f"📄 {uploaded_file.name} ({uploaded_file.size/1024:.1f} KB)")
         
-        if st.button("🚀 Upload & Analyze", use_column_width=True):
+        # FIXED: Button uses use_container_width=True
+        if st.button("🚀 Upload & Analyze", use_container_width=True):
             with st.spinner("Analyzing your data..."):
                 try:
                     files = {'file': (uploaded_file.name, uploaded_file.getvalue(), 'text/csv')}
@@ -755,7 +756,7 @@ else:
         if st.session_state.chart_path:
             st.image(st.session_state.chart_path, use_column_width=True)
         else:
-            if st.button("🔄 Generate Chart"):
+            if st.button("🔄 Generate Chart", use_container_width=True):
                 try:
                     response = requests.get(f"{st.session_state.api_url}/chart")
                     if response.status_code == 200:
@@ -954,7 +955,8 @@ else:
             )
         
         with col2:
-            ask_button = st.button("❓ Ask", use_column_width=True, key="ask_btn")
+            # FIXED: Button uses use_container_width=True
+            ask_button = st.button("❓ Ask", use_container_width=True, key="ask_btn")
         
         if ask_button and question:
             with st.spinner("Analyzing..."):
@@ -989,7 +991,8 @@ else:
         
         for i, q in enumerate(examples):
             with cols[i]:
-                if st.button(q, key=f"q_{i}", use_column_width=True):
+                # FIXED: Button uses use_container_width=True
+                if st.button(q, key=f"q_{i}", use_container_width=True):
                     st.session_state._temp_question = q
                     st.rerun()
         
@@ -1036,7 +1039,8 @@ else:
             )
         
         with col2:
-            generate_btn = st.button("🎨 Generate", use_column_width=True, key="generate_chart_btn")
+            # FIXED: Button uses use_container_width=True
+            generate_btn = st.button("🎨 Generate", use_container_width=True, key="generate_chart_btn")
         
         if generate_btn:
             with st.spinner("Generating chart..."):
@@ -1070,13 +1074,14 @@ else:
                     data=f,
                     file_name="chart.png",
                     mime="image/png",
-                    use_column_width=True
+                    use_container_width=True
                 )
         
         st.divider()
         st.subheader("🤖 Explain This Chart")
         
-        if st.button("📊 Explain This Chart with AI", use_column_width=True):
+        # FIXED: Button uses use_container_width=True
+        if st.button("📊 Explain This Chart with AI", use_container_width=True):
             with st.spinner("🤖 AI is analyzing the chart..."):
                 try:
                     chart_type = st.session_state.get('last_chart_type', 'Auto')
@@ -1116,7 +1121,8 @@ else:
         </p>
         """, unsafe_allow_html=True)
         
-        if st.button("📊 Explain My Data with AI", use_column_width=True):
+        # FIXED: Button uses use_container_width=True
+        if st.button("📊 Explain My Data with AI", use_container_width=True):
             with st.spinner("🤖 AI is analyzing your dataset..."):
                 try:
                     response = requests.post(f"{st.session_state.api_url}/explain-data")
@@ -1149,7 +1155,8 @@ else:
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("📊 Export PDF Report", use_column_width=True):
+            # FIXED: Button uses use_container_width=True
+            if st.button("📊 Export PDF Report", use_container_width=True):
                 with st.spinner("Generating PDF..."):
                     try:
                         response = requests.get(f"{st.session_state.api_url}/export-pdf")
@@ -1166,7 +1173,7 @@ else:
                                     data=f,
                                     file_name="analysis_report.pdf",
                                     mime="application/pdf",
-                                    use_column_width=True
+                                    use_container_width=True
                                 )
                         else:
                             st.error(f"Error: {response.text}")
@@ -1174,7 +1181,8 @@ else:
                         st.error(f"Error: {str(e)}")
         
         with col2:
-            if st.button("📋 Export Summary (JSON)", use_column_width=True):
+            # FIXED: Button uses use_container_width=True
+            if st.button("📋 Export Summary (JSON)", use_container_width=True):
                 st.json(st.session_state.summary)
     
     # ================================================================
@@ -1341,8 +1349,9 @@ else:
                     st.divider()
                     col1, col2, col3 = st.columns([2, 1, 2])
                     with col2:
-                        apply_cleaning = st.button("✅ Apply Cleaning", use_column_width=True, type="primary")
-                        reset_data = st.button("🔄 Reset to Original", use_column_width=True)
+                        # FIXED: Buttons use use_container_width=True
+                        apply_cleaning = st.button("✅ Apply Cleaning", use_container_width=True, type="primary")
+                        reset_data = st.button("🔄 Reset to Original", use_container_width=True)
                     
                     # ============================================================
                     # SECTION 5: APPLY CLEANING
@@ -1668,7 +1677,8 @@ else:
                 # ============================================================
                 st.subheader("🤖 AI-Generated Insights")
                 
-                if st.button("📊 Generate Insights from Data", use_column_width=True):
+                # FIXED: Button uses use_container_width=True
+                if st.button("📊 Generate Insights from Data", use_container_width=True):
                     with st.spinner("🤖 AI is analyzing your data..."):
                         try:
                             response = requests.post(f"{st.session_state.api_url}/explain-data")
@@ -1698,7 +1708,8 @@ else:
                 st.divider()
                 st.subheader("📄 Executive Summary")
 
-                if st.button("📊 Generate Executive Summary", use_column_width=True):
+                # FIXED: Button uses use_container_width=True
+                if st.button("📊 Generate Executive Summary", use_container_width=True):
                     with st.spinner("Generating executive summary..."):
                         # Get cleaned data
                         if st.session_state.cleaned_df is not None:
@@ -1775,12 +1786,13 @@ else:
                         # Centered Download Button
                         col1, col2, col3 = st.columns([1, 2, 1])
                         with col2:
+                            # FIXED: Button uses use_container_width=True
                             st.download_button(
                                 label="📥 Download Executive Summary (Markdown)",
                                 data=summary,
                                 file_name=f"executive_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
                                 mime="text/markdown",
-                                use_column_width=True
+                                use_container_width=True
                             )
             else:
                 st.error("Could not load dataset for statistics")
