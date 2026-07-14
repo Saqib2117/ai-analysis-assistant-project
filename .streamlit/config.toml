@@ -1,6 +1,5 @@
 [server]
 maxUploadSize = 100
-enableFileWatcher = false
 headless = true
 
 [theme]
