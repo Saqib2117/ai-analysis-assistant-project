@@ -1,0 +1,14 @@
+[server]
+maxUploadSize = 100
+enableFileWatcher = false
+headless = true
+
+[theme]
+base = "dark"
+primaryColor = "#667eea"
+
+[browser]
+gatherUsageStats = false
+
+[runner]
+fastReruns = false
