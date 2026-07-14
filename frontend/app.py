@@ -600,7 +600,7 @@ with st.sidebar:
     <p style="color: #64748b; font-size: 0.8rem;">Upload a CSV file to analyze</p>
     """, unsafe_allow_html=True)
     
-    uploaded_file = st.file_uploader("", type=['csv'], label_visibility="collapsed")
+    uploaded_file = st.file_uploader("Upload CSV file", type=['csv'], label_visibility="collapsed")
     
     if uploaded_file is not None:
         st.info(f"📄 {uploaded_file.name} ({uploaded_file.size/1024:.1f} KB)")
@@ -758,7 +758,7 @@ else:
         st.divider()
         st.subheader("📈 Chart Preview")
         if st.session_state.chart_path:
-            st.image(st.session_state.chart_path, width="stretch")  # FIXED
+            st.image(st.session_state.chart_path, use_container_width=True)
         else:
             if st.button("🔄 Generate Chart", use_container_width=True):
                 try:
@@ -860,7 +860,7 @@ else:
                                                     'Value': first_10.values                                                })
                                                 # Reorder columns to put Index first
                                                 display_df = display_df[['Index', 'Value']]
-                                                st.dataframe(display_df, use_container_width=True, hide_index=True)  # FIXED
+                                                st.dataframe(display_df, use_container_width=True, hide_index=True)
                                                 
                                                 # --- Show value counts for categorical columns ---
                                                 if col_type == 'object' or col_type.name == 'category' or col_type == 'str':
@@ -898,13 +898,13 @@ else:
                                     
                                     # First 5 rows
                                     st.subheader("📄 First 5 Rows")
-                                    st.dataframe(df_full.head(5), use_container_width=True)  # FIXED
+                                    st.dataframe(df_full.head(5), use_container_width=True)
                                     
                                     st.divider()
                                     
                                     # Last 5 rows
                                     st.subheader("📄 Last 5 Rows")
-                                    st.dataframe(df_full.tail(5), use_container_width=True)  # FIXED
+                                    st.dataframe(df_full.tail(5), use_container_width=True)
                             else:
                                 st.info("No data available to preview")
                         else:
@@ -1058,7 +1058,7 @@ else:
                             f.write(response.content)
                         st.session_state.chart_path = chart_path
                         st.session_state.last_chart_type = chart_type
-                        st.image(chart_path, width="stretch")  # FIXED
+                        st.image(chart_path, use_container_width=True)
                         st.success("✅ Chart generated!")
                     else:
                         st.error(f"Error: {response.text}")
@@ -1066,7 +1066,7 @@ else:
                     st.error(f"Error: {str(e)}")
         
         if st.session_state.chart_path:
-            st.image(st.session_state.chart_path, width="stretch")  # FIXED
+            st.image(st.session_state.chart_path, use_container_width=True)
             
             with open(st.session_state.chart_path, "rb") as f:
                 st.download_button(
@@ -1144,12 +1144,8 @@ else:
                     st.error(f"Error: {str(e)}")
     
     # ================================================================
-    # TAB 5: Export
+    # TAB 5: Export (UPGRADED)
     # ================================================================
-    
-# ================================================================
-# TAB 5: Export (UPGRADED)
-# ================================================================
 
     with tab5:
         st.subheader("📄 Export Analysis")
@@ -1365,7 +1361,7 @@ else:
                             'Missing Values': missing_data.values,
                             'Percentage': (missing_data.values / len(df) * 100).round(2)
                         })
-                        st.dataframe(missing_df, use_container_width=True)  # FIXED
+                        st.dataframe(missing_df, use_container_width=True)
                     else:
                         st.success("✅ No missing values found in the dataset!")
                     
@@ -1618,7 +1614,7 @@ else:
                             describe_df.loc[col, 'unique'] = df[col].nunique()
                             describe_df.loc[col, 'top'] = df[col].mode()[0] if not df[col].mode().empty else ''
                             describe_df.loc[col, 'freq'] = df[col].value_counts().iloc[0] if len(df[col].value_counts()) > 0 else 0
-                    st.dataframe(describe_df, use_container_width=True)  # FIXED
+                    st.dataframe(describe_df, use_container_width=True)
                 
                 st.divider()
                 
@@ -1648,7 +1644,7 @@ else:
                         }
                         numeric_stats.append(stats)
                     stats_df = pd.DataFrame(numeric_stats)
-                    st.dataframe(stats_df.round(2), use_container_width=True)  # FIXED
+                    st.dataframe(stats_df.round(2), use_container_width=True)
                 else:
                     st.info("No numeric columns found in the dataset.")
                 
@@ -1671,7 +1667,7 @@ else:
                                 'Count': value_counts.values,
                                 'Percentage': (value_counts.values / total * 100).round(2)
                             })
-                            st.dataframe(cat_df.head(10), use_container_width=True)  # FIXED
+                            st.dataframe(cat_df.head(10), use_container_width=True)
                             st.write(f"**Total categories:** {len(value_counts)}")
                             st.write(f"**Most common:** '{value_counts.index[0]}' ({value_counts.iloc[0]} occurrences, {(value_counts.iloc[0]/total*100):.1f}%)")
                     
@@ -1719,7 +1715,7 @@ else:
                             }
                     
                     outlier_df = pd.DataFrame(outlier_results)
-                    st.dataframe(outlier_df.round(2), use_container_width=True)  # FIXED
+                    st.dataframe(outlier_df.round(2), use_container_width=True)
                     
                     columns_with_outliers = outlier_df[outlier_df['Outliers Count'] > 0]
                     
@@ -1749,7 +1745,7 @@ else:
                                         'Status': ['⚠️ Outlier'] * len(values[:10])
                                     })
                                     st.write(f"**First 10 outlier values in `{col}`:**")
-                                    st.dataframe(outlier_vals_df, use_container_width=True, hide_index=True)  # FIXED
+                                    st.dataframe(outlier_vals_df, use_container_width=True, hide_index=True)
                                     if len(values) > 10:
                                         st.write(f"... and {len(values) - 10} more outliers")
                                     st.write(f"**Range of outliers:** {min(values):.2f} to {max(values):.2f}")
