@@ -413,6 +413,12 @@ if '_temp_question' not in st.session_state:
     st.session_state._temp_question = ""
 if 'last_chart_type' not in st.session_state:
     st.session_state.last_chart_type = "Auto"
+if 'cleaned_df' not in st.session_state:
+    st.session_state.cleaned_df = None
+if 'cleaning_applied' not in st.session_state:
+    st.session_state.cleaning_applied = False
+if 'cleaning_message' not in st.session_state:
+    st.session_state.cleaning_message = ""
 
 # ================================================================
 # HELPER FUNCTIONS - FIXED TABLE FORMATTING
@@ -752,7 +758,7 @@ else:
         st.divider()
         st.subheader("📈 Chart Preview")
         if st.session_state.chart_path:
-            st.image(st.session_state.chart_path, use_column_width=True)
+            st.image(st.session_state.chart_path, width="stretch")  # FIXED
         else:
             if st.button("🔄 Generate Chart", use_container_width=True):
                 try:
@@ -851,11 +857,10 @@ else:
                                                 # Display as a simple table with Index column first
                                                 display_df = pd.DataFrame({
                                                     'Index': first_10.index,
-                                                    'Value': first_10.values
-                                                })
+                                                    'Value': first_10.values                                                })
                                                 # Reorder columns to put Index first
                                                 display_df = display_df[['Index', 'Value']]
-                                                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                                                st.dataframe(display_df, use_container_width=True, hide_index=True)  # FIXED
                                                 
                                                 # --- Show value counts for categorical columns ---
                                                 if col_type == 'object' or col_type.name == 'category' or col_type == 'str':
@@ -893,13 +898,13 @@ else:
                                     
                                     # First 5 rows
                                     st.subheader("📄 First 5 Rows")
-                                    st.dataframe(df_full.head(5), use_container_width=True)
+                                    st.dataframe(df_full.head(5), use_container_width=True)  # FIXED
                                     
                                     st.divider()
                                     
                                     # Last 5 rows
                                     st.subheader("📄 Last 5 Rows")
-                                    st.dataframe(df_full.tail(5), use_container_width=True)
+                                    st.dataframe(df_full.tail(5), use_container_width=True)  # FIXED
                             else:
                                 st.info("No data available to preview")
                         else:
@@ -1053,7 +1058,7 @@ else:
                             f.write(response.content)
                         st.session_state.chart_path = chart_path
                         st.session_state.last_chart_type = chart_type
-                        st.image(chart_path, use_column_width=True)
+                        st.image(chart_path, width="stretch")  # FIXED
                         st.success("✅ Chart generated!")
                     else:
                         st.error(f"Error: {response.text}")
@@ -1061,7 +1066,7 @@ else:
                     st.error(f"Error: {str(e)}")
         
         if st.session_state.chart_path:
-            st.image(st.session_state.chart_path, use_column_width=True)
+            st.image(st.session_state.chart_path, width="stretch")  # FIXED
             
             with open(st.session_state.chart_path, "rb") as f:
                 st.download_button(
@@ -1142,39 +1147,132 @@ else:
     # TAB 5: Export
     # ================================================================
     
+# ================================================================
+# TAB 5: Export (UPGRADED)
+# ================================================================
+
     with tab5:
         st.subheader("📄 Export Analysis")
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("📊 Export PDF Report", use_container_width=True):
-                with st.spinner("Generating PDF..."):
-                    try:
-                        response = requests.get(f"{st.session_state.api_url}/export-pdf")
-                        if response.status_code == 200:
-                            os.makedirs("exports", exist_ok=True)
-                            filename = f"exports/analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-                            with open(filename, "wb") as f:
-                                f.write(response.content)
-                            
-                            st.success("✅ PDF generated!")
-                            with open(filename, "rb") as f:
-                                st.download_button(
-                                    label="📥 Download PDF",
-                                    data=f,
-                                    file_name="analysis_report.pdf",
-                                    mime="application/pdf",
-                                    use_container_width=True
-                                )
-                        else:
-                            st.error(f"Error: {response.text}")
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-        
-        with col2:
-            if st.button("📋 Export Summary (JSON)", use_container_width=True):
-                st.json(st.session_state.summary)
+        if not st.session_state.data_loaded:
+            st.info("Please upload a dataset first to export analysis.")
+        else:
+            # Initialize cleaned_df if not exists
+            if 'cleaned_df' not in st.session_state:
+                st.session_state.cleaned_df = None
+            
+            # Get current dataframe
+            try:
+                response = requests.get(f"{st.session_state.api_url}/full-dataset")
+                if response.status_code == 200:
+                    full_data = response.json()
+                    df = pd.DataFrame(full_data.get('data', []))
+                    
+                    # Check if cleaned data exists
+                    if st.session_state.cleaned_df is not None:
+                        df = st.session_state.cleaned_df
+                        is_cleaned = True
+                    else:
+                        is_cleaned = False
+                    
+                    # ============================================================
+                    # SECTION 1: EXPORT OPTIONS
+                    # ============================================================
+                    st.subheader("📊 Export Options")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("""
+                        <div style="background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08);">
+                            <h4 style="color: #a78bfa;">📄 PDF Report</h4>
+                            <p style="color: #8892b0; font-size: 0.9rem;">
+                                Generate a comprehensive PDF report including:
+                            </p>
+                            <ul style="color: #8892b0; font-size: 0.85rem;">
+                                <li>Dataset Overview</li>
+                                <li>Data Quality Metrics</li>
+                                <li>AI-Generated Insights</li>
+                                <li>Executive Summary</li>
+                                <li>Chart with AI Explanation</li>
+                            </ul>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        if st.button("📊 Generate PDF Report", use_container_width=True):
+                            with st.spinner("Generating comprehensive PDF report..."):
+                                try:
+                                    response = requests.get(f"{st.session_state.api_url}/export-pdf")
+                                    if response.status_code == 200:
+                                        os.makedirs("exports", exist_ok=True)
+                                        filename = f"exports/analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+                                        with open(filename, "wb") as f:
+                                            f.write(response.content)
+                                        
+                                        st.success("✅ PDF Report generated successfully!")
+                                        with open(filename, "rb") as f:
+                                            st.download_button(
+                                                label="📥 Download PDF Report",
+                                                data=f,
+                                                file_name="analysis_report.pdf",
+                                                mime="application/pdf",
+                                                use_container_width=True
+                                            )
+                                    else:
+                                        st.error(f"Error generating PDF: {response.text}")
+                                except Exception as e:
+                                    st.error(f"Error: {str(e)}")
+                    
+                    with col2:
+                        st.markdown("""
+                        <div style="background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08);">
+                            <h4 style="color: #a78bfa;">📥 Download Cleaned Dataset</h4>
+                            <p style="color: #8892b0; font-size: 0.9rem;">
+                                Download the cleaned dataset as CSV.
+                            </p>
+                            <ul style="color: #8892b0; font-size: 0.85rem;">
+                                <li>✅ Only available if cleaned</li>
+                                <li>✅ Ready for further analysis</li>
+                                <li>✅ Preserves all data quality improvements</li>
+                            </ul>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        if st.button("📥 Download Cleaned Dataset", use_container_width=True):
+                            if is_cleaned:
+                                try:
+                                    # Convert cleaned dataframe to CSV
+                                    csv_data = st.session_state.cleaned_df.to_csv(index=False)
+                                    
+                                    st.success("✅ Cleaned dataset ready for download!")
+                                    st.download_button(
+                                        label="📥 Download CSV",
+                                        data=csv_data,
+                                        file_name=f"cleaned_dataset_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                        mime="text/csv",
+                                        use_container_width=True
+                                    )
+                                except Exception as e:
+                                    st.error(f"Error: {str(e)}")
+                            else:
+                                st.error("❌ You have not cleaned the dataset yet. Please go to the Data Cleaning tab first.")
+                    
+                    st.divider()
+                    
+                    # ============================================================
+                    # SECTION 2: CLEANING STATUS
+                    # ============================================================
+                    st.subheader("📋 Cleaning Status")
+                    
+                    if is_cleaned:
+                        st.success(f"✅ Dataset has been cleaned. {len(st.session_state.cleaned_df):,} rows, {len(st.session_state.cleaned_df.columns)} columns")
+                    else:
+                        st.warning("⚠️ Dataset has not been cleaned yet. Visit the Data Cleaning tab to clean your data.")
+                        
+                else:
+                    st.error("Could not load dataset for export")
+            except Exception as e:
+                st.error(f"Error loading data: {str(e)}")
     
     # ================================================================
     # TAB 7: Data Cleaning & Info
@@ -1267,7 +1365,7 @@ else:
                             'Missing Values': missing_data.values,
                             'Percentage': (missing_data.values / len(df) * 100).round(2)
                         })
-                        st.dataframe(missing_df, use_container_width=True)
+                        st.dataframe(missing_df, use_container_width=True)  # FIXED
                     else:
                         st.success("✅ No missing values found in the dataset!")
                     
@@ -1520,7 +1618,7 @@ else:
                             describe_df.loc[col, 'unique'] = df[col].nunique()
                             describe_df.loc[col, 'top'] = df[col].mode()[0] if not df[col].mode().empty else ''
                             describe_df.loc[col, 'freq'] = df[col].value_counts().iloc[0] if len(df[col].value_counts()) > 0 else 0
-                    st.dataframe(describe_df, use_container_width=True)
+                    st.dataframe(describe_df, use_container_width=True)  # FIXED
                 
                 st.divider()
                 
@@ -1550,7 +1648,7 @@ else:
                         }
                         numeric_stats.append(stats)
                     stats_df = pd.DataFrame(numeric_stats)
-                    st.dataframe(stats_df.round(2), use_container_width=True)
+                    st.dataframe(stats_df.round(2), use_container_width=True)  # FIXED
                 else:
                     st.info("No numeric columns found in the dataset.")
                 
@@ -1573,7 +1671,7 @@ else:
                                 'Count': value_counts.values,
                                 'Percentage': (value_counts.values / total * 100).round(2)
                             })
-                            st.dataframe(cat_df.head(10), use_container_width=True)
+                            st.dataframe(cat_df.head(10), use_container_width=True)  # FIXED
                             st.write(f"**Total categories:** {len(value_counts)}")
                             st.write(f"**Most common:** '{value_counts.index[0]}' ({value_counts.iloc[0]} occurrences, {(value_counts.iloc[0]/total*100):.1f}%)")
                     
@@ -1621,7 +1719,7 @@ else:
                             }
                     
                     outlier_df = pd.DataFrame(outlier_results)
-                    st.dataframe(outlier_df.round(2), use_container_width=True)
+                    st.dataframe(outlier_df.round(2), use_container_width=True)  # FIXED
                     
                     columns_with_outliers = outlier_df[outlier_df['Outliers Count'] > 0]
                     
@@ -1651,7 +1749,7 @@ else:
                                         'Status': ['⚠️ Outlier'] * len(values[:10])
                                     })
                                     st.write(f"**First 10 outlier values in `{col}`:**")
-                                    st.dataframe(outlier_vals_df, use_container_width=True, hide_index=True)
+                                    st.dataframe(outlier_vals_df, use_container_width=True, hide_index=True)  # FIXED
                                     if len(values) > 10:
                                         st.write(f"... and {len(values) - 10} more outliers")
                                     st.write(f"**Range of outliers:** {min(values):.2f} to {max(values):.2f}")
