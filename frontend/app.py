@@ -599,7 +599,7 @@ with st.sidebar:
     if uploaded_file is not None:
         st.info(f"📄 {uploaded_file.name} ({uploaded_file.size/1024:.1f} KB)")
         
-        if st.button("🚀 Upload & Analyze", use_column_width=True):  # FIXED
+        if st.button("🚀 Upload & Analyze", use_column_width=True):
             with st.spinner("Analyzing your data..."):
                 try:
                     files = {'file': (uploaded_file.name, uploaded_file.getvalue(), 'text/csv')}
@@ -753,7 +753,7 @@ else:
         st.divider()
         st.subheader("📈 Chart Preview")
         if st.session_state.chart_path:
-            st.image(st.session_state.chart_path, use_column_width=True)  # FIXED
+            st.image(st.session_state.chart_path, use_column_width=True)
         else:
             if st.button("🔄 Generate Chart"):
                 try:
@@ -849,13 +849,14 @@ else:
                                                 # Create a clean display of first 10 values
                                                 first_10 = col_data.head(10).reset_index(drop=True)
                                                 
-                                                # Display as a simple table with Index column first                                                display_df = pd.DataFrame({
+                                                # Display as a simple table with Index column first
+                                                display_df = pd.DataFrame({
                                                     'Index': first_10.index,
                                                     'Value': first_10.values
                                                 })
                                                 # Reorder columns to put Index first
                                                 display_df = display_df[['Index', 'Value']]
-                                                st.dataframe(display_df, use_column_width=True, hide_index=True)  # FIXED
+                                                st.dataframe(display_df, use_column_width=True, hide_index=True)
                                                 
                                                 # --- Show value counts for categorical columns ---
                                                 if col_type == 'object' or col_type.name == 'category' or col_type == 'str':
@@ -893,13 +894,13 @@ else:
                                     
                                     # First 5 rows
                                     st.subheader("📄 First 5 Rows")
-                                    st.dataframe(df_full.head(5), use_column_width=True)  # FIXED
+                                    st.dataframe(df_full.head(5), use_column_width=True)
                                     
                                     st.divider()
                                     
                                     # Last 5 rows
                                     st.subheader("📄 Last 5 Rows")
-                                    st.dataframe(df_full.tail(5), use_column_width=True)  # FIXED
+                                    st.dataframe(df_full.tail(5), use_column_width=True)
                             else:
                                 st.info("No data available to preview")
                         else:
@@ -953,7 +954,7 @@ else:
             )
         
         with col2:
-            ask_button = st.button("❓ Ask", use_column_width=True, key="ask_btn")  # FIXED
+            ask_button = st.button("❓ Ask", use_column_width=True, key="ask_btn")
         
         if ask_button and question:
             with st.spinner("Analyzing..."):
@@ -988,7 +989,7 @@ else:
         
         for i, q in enumerate(examples):
             with cols[i]:
-                if st.button(q, key=f"q_{i}", use_column_width=True):  # FIXED
+                if st.button(q, key=f"q_{i}", use_column_width=True):
                     st.session_state._temp_question = q
                     st.rerun()
         
@@ -1035,7 +1036,7 @@ else:
             )
         
         with col2:
-            generate_btn = st.button("🎨 Generate", use_column_width=True, key="generate_chart_btn")  # FIXED
+            generate_btn = st.button("🎨 Generate", use_column_width=True, key="generate_chart_btn")
         
         if generate_btn:
             with st.spinner("Generating chart..."):
@@ -1053,7 +1054,7 @@ else:
                             f.write(response.content)
                         st.session_state.chart_path = chart_path
                         st.session_state.last_chart_type = chart_type
-                        st.image(chart_path, use_column_width=True)  # FIXED
+                        st.image(chart_path, use_column_width=True)
                         st.success("✅ Chart generated!")
                     else:
                         st.error(f"Error: {response.text}")
@@ -1061,7 +1062,7 @@ else:
                     st.error(f"Error: {str(e)}")
         
         if st.session_state.chart_path:
-            st.image(st.session_state.chart_path, use_column_width=True)  # FIXED
+            st.image(st.session_state.chart_path, use_column_width=True)
             
             with open(st.session_state.chart_path, "rb") as f:
                 st.download_button(
@@ -1069,13 +1070,13 @@ else:
                     data=f,
                     file_name="chart.png",
                     mime="image/png",
-                    use_column_width=True  # FIXED
+                    use_column_width=True
                 )
         
         st.divider()
         st.subheader("🤖 Explain This Chart")
         
-        if st.button("📊 Explain This Chart with AI", use_column_width=True):  # FIXED
+        if st.button("📊 Explain This Chart with AI", use_column_width=True):
             with st.spinner("🤖 AI is analyzing the chart..."):
                 try:
                     chart_type = st.session_state.get('last_chart_type', 'Auto')
@@ -1115,7 +1116,7 @@ else:
         </p>
         """, unsafe_allow_html=True)
         
-        if st.button("📊 Explain My Data with AI", use_column_width=True):  # FIXED
+        if st.button("📊 Explain My Data with AI", use_column_width=True):
             with st.spinner("🤖 AI is analyzing your dataset..."):
                 try:
                     response = requests.post(f"{st.session_state.api_url}/explain-data")
@@ -1148,7 +1149,7 @@ else:
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("📊 Export PDF Report", use_column_width=True):  # FIXED
+            if st.button("📊 Export PDF Report", use_column_width=True):
                 with st.spinner("Generating PDF..."):
                     try:
                         response = requests.get(f"{st.session_state.api_url}/export-pdf")
@@ -1165,7 +1166,7 @@ else:
                                     data=f,
                                     file_name="analysis_report.pdf",
                                     mime="application/pdf",
-                                    use_column_width=True  # FIXED
+                                    use_column_width=True
                                 )
                         else:
                             st.error(f"Error: {response.text}")
@@ -1173,7 +1174,7 @@ else:
                         st.error(f"Error: {str(e)}")
         
         with col2:
-            if st.button("📋 Export Summary (JSON)", use_column_width=True):  # FIXED
+            if st.button("📋 Export Summary (JSON)", use_column_width=True):
                 st.json(st.session_state.summary)
     
     # ================================================================
@@ -1267,7 +1268,7 @@ else:
                             'Missing Values': missing_data.values,
                             'Percentage': (missing_data.values / len(df) * 100).round(2)
                         })
-                        st.dataframe(missing_df, use_column_width=True)  # FIXED
+                        st.dataframe(missing_df, use_column_width=True)
                     else:
                         st.success("✅ No missing values found in the dataset!")
                     
@@ -1340,8 +1341,8 @@ else:
                     st.divider()
                     col1, col2, col3 = st.columns([2, 1, 2])
                     with col2:
-                        apply_cleaning = st.button("✅ Apply Cleaning", use_column_width=True, type="primary")  # FIXED
-                        reset_data = st.button("🔄 Reset to Original", use_column_width=True)  # FIXED
+                        apply_cleaning = st.button("✅ Apply Cleaning", use_column_width=True, type="primary")
+                        reset_data = st.button("🔄 Reset to Original", use_column_width=True)
                     
                     # ============================================================
                     # SECTION 5: APPLY CLEANING
@@ -1520,7 +1521,7 @@ else:
                             describe_df.loc[col, 'unique'] = df[col].nunique()
                             describe_df.loc[col, 'top'] = df[col].mode()[0] if not df[col].mode().empty else ''
                             describe_df.loc[col, 'freq'] = df[col].value_counts().iloc[0] if len(df[col].value_counts()) > 0 else 0
-                    st.dataframe(describe_df, use_column_width=True)  # FIXED
+                    st.dataframe(describe_df, use_column_width=True)
                 
                 st.divider()
                 
@@ -1550,7 +1551,7 @@ else:
                         }
                         numeric_stats.append(stats)
                     stats_df = pd.DataFrame(numeric_stats)
-                    st.dataframe(stats_df.round(2), use_column_width=True)  # FIXED
+                    st.dataframe(stats_df.round(2), use_column_width=True)
                 else:
                     st.info("No numeric columns found in the dataset.")
                 
@@ -1573,7 +1574,7 @@ else:
                                 'Count': value_counts.values,
                                 'Percentage': (value_counts.values / total * 100).round(2)
                             })
-                            st.dataframe(cat_df.head(10), use_column_width=True)  # FIXED
+                            st.dataframe(cat_df.head(10), use_column_width=True)
                             st.write(f"**Total categories:** {len(value_counts)}")
                             st.write(f"**Most common:** '{value_counts.index[0]}' ({value_counts.iloc[0]} occurrences, {(value_counts.iloc[0]/total*100):.1f}%)")
                     
@@ -1621,7 +1622,7 @@ else:
                             }
                     
                     outlier_df = pd.DataFrame(outlier_results)
-                    st.dataframe(outlier_df.round(2), use_column_width=True)  # FIXED
+                    st.dataframe(outlier_df.round(2), use_column_width=True)
                     
                     columns_with_outliers = outlier_df[outlier_df['Outliers Count'] > 0]
                     
@@ -1651,7 +1652,7 @@ else:
                                         'Status': ['⚠️ Outlier'] * len(values[:10])
                                     })
                                     st.write(f"**First 10 outlier values in `{col}`:**")
-                                    st.dataframe(outlier_vals_df, use_column_width=True, hide_index=True)  # FIXED
+                                    st.dataframe(outlier_vals_df, use_column_width=True, hide_index=True)
                                     if len(values) > 10:
                                         st.write(f"... and {len(values) - 10} more outliers")
                                     st.write(f"**Range of outliers:** {min(values):.2f} to {max(values):.2f}")
@@ -1667,7 +1668,7 @@ else:
                 # ============================================================
                 st.subheader("🤖 AI-Generated Insights")
                 
-                if st.button("📊 Generate Insights from Data", use_column_width=True):  # FIXED
+                if st.button("📊 Generate Insights from Data", use_column_width=True):
                     with st.spinner("🤖 AI is analyzing your data..."):
                         try:
                             response = requests.post(f"{st.session_state.api_url}/explain-data")
@@ -1697,7 +1698,7 @@ else:
                 st.divider()
                 st.subheader("📄 Executive Summary")
 
-                if st.button("📊 Generate Executive Summary", use_column_width=True):  # FIXED
+                if st.button("📊 Generate Executive Summary", use_column_width=True):
                     with st.spinner("Generating executive summary..."):
                         # Get cleaned data
                         if st.session_state.cleaned_df is not None:
@@ -1779,7 +1780,7 @@ else:
                                 data=summary,
                                 file_name=f"executive_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
                                 mime="text/markdown",
-                                use_column_width=True  # FIXED
+                                use_column_width=True
                             )
             else:
                 st.error("Could not load dataset for statistics")
