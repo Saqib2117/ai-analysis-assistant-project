@@ -758,7 +758,7 @@ else:
         st.divider()
         st.subheader("📈 Chart Preview")
         if st.session_state.chart_path:
-            st.image(st.session_state.chart_path, use_container_width=True)
+            st.image(st.session_state.chart_path, use_column_width=True)
         else:
             if st.button("🔄 Generate Chart", use_container_width=True):
                 try:
@@ -1058,7 +1058,7 @@ else:
                             f.write(response.content)
                         st.session_state.chart_path = chart_path
                         st.session_state.last_chart_type = chart_type
-                        st.image(chart_path, use_container_width=True)
+                        st.image(chart_path, use_column_width=True)
                         st.success("✅ Chart generated!")
                     else:
                         st.error(f"Error: {response.text}")
@@ -1066,7 +1066,7 @@ else:
                     st.error(f"Error: {str(e)}")
         
         if st.session_state.chart_path:
-            st.image(st.session_state.chart_path, use_container_width=True)
+            st.image(st.session_state.chart_path, use_column_width=True)
             
             with open(st.session_state.chart_path, "rb") as f:
                 st.download_button(
