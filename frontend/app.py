@@ -425,11 +425,35 @@ if 'cleaning_message' not in st.session_state:
 # ================================================================
 
 def clean_markdown(text):
-    """Remove ALL ** markers and clean text for display"""
+    """Convert light markdown to proper HTML for display in the custom chat
+    bubbles (which are rendered via unsafe_allow_html, not st.markdown's own
+    parser).
+
+    FIXED: previously this deleted every '**' outright, so bold from the
+    backend never actually showed up on screen - it was just silently
+    erased. It also collapsed all newlines into a single space, which is
+    why detailed/grouped answers rendered as one run-on line instead of a
+    readable list. Now '**bold**' becomes real <strong> HTML, stray '#'
+    headers and emoji are stripped, and line breaks are preserved as <br>.
+    """
     if not text:
         return ""
-    text = text.replace('**', '')
-    text = ' '.join(text.split())
+
+    # Convert **bold** to real HTML bold
+    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+
+    # Strip stray markdown headers (#) if any slip through
+    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)
+
+    # Strip emoji/icons that shouldn't appear in AI-generated answer text
+    for symbol in ["📊", "💡", "✅", "⚠️", "🤖", "❓", "■"]:
+        text = text.replace(symbol, "")
+
+    # Preserve paragraph/line structure instead of collapsing to one line
+    text = text.strip()
+    text = re.sub(r'\n{2,}', '\n\n', text)
+    text = text.replace('\n\n', '<br><br>').replace('\n', '<br>')
+
     return text
 
 def update_summary_after_cleaning(df):
@@ -641,7 +665,7 @@ with st.sidebar:
     <h4 style="color: #a78bfa; margin-bottom: 0.5rem; font-size: 1rem;">✨ Features</h4>
     """, unsafe_allow_html=True)
     
-    features = ["📊 Auto Charts", "❓ Natural Language Q&A", "🤖 AI Explanations", "📄 PDF Export", "📥 Chart Download"]
+    features = ["Auto Chart", "Natural Language", "Statistics and Insights", "Data Cleaning and Info", "AI Explanations", "Export PDF Reports and Cleaned Dataset", "Chart Download"]
     for f in features:
         st.markdown(f"<p style='font-size: 0.85rem; color: #8892b0; margin: 0.2rem 0;'>• {f}</p>", unsafe_allow_html=True)
     
@@ -671,10 +695,13 @@ if not st.session_state.data_loaded:
             <p>📌 <strong>Quick Start Guide</strong></p>
             <p style="font-size: 0.9rem !important;">
                 1️⃣ Upload a CSV file from the sidebar<br>
-                2️⃣ View automatic dataset summary<br>
-                3️⃣ Ask questions about your data<br>
-                4️⃣ Generate professional charts<br>
-                5️⃣ Export PDF reports
+                2️⃣ Preview your dataset<br>
+                3️⃣ Statistic and Insights for your data<br>
+                4️⃣ Data Cleaning and info<br>
+                5️⃣ Ask questions about your data<br>
+                6️⃣ Explanation of your data<br>
+                7️⃣ Generate professional charts<br>
+                8️⃣ Export PDF reports and Export Cleaned Dataset
             </p>
         </div>
     </div>
@@ -1026,126 +1053,324 @@ else:
     # ================================================================
     # TAB 3: Charts
     # ================================================================
-    
+
     with tab3:
         st.subheader("📈 Chart Generation")
         
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            chart_type = st.selectbox(
-                "Select Chart Type",
-                ["Auto", "Bar", "Pie", "Histogram", "Scatter"],
-                label_visibility="collapsed"
-            )
-        
-        with col2:
-            generate_btn = st.button("🎨 Generate", use_container_width=True, key="generate_chart_btn")
-        
-        if generate_btn:
-            with st.spinner("Generating chart..."):
-                try:
-                    if chart_type == "Auto":
-                        endpoint = f"{st.session_state.api_url}/chart"
-                    else:
-                        endpoint = f"{st.session_state.api_url}/chart/{chart_type.lower()}"
+        try:
+            response = requests.get(f"{st.session_state.api_url}/full-dataset")
+            if response.status_code == 200:
+                full_data = response.json()
+                df = pd.DataFrame(full_data.get('data', []))
+                
+                if st.session_state.cleaned_df is not None:
+                    df = st.session_state.cleaned_df
+                
+                if not df.empty:
+                    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                    categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+                    all_cols = df.columns.tolist()
                     
-                    response = requests.get(endpoint)
-                    if response.status_code == 200:
-                        os.makedirs("temp", exist_ok=True)
-                        chart_path = f"temp/{chart_type.lower()}_chart.png"
-                        with open(chart_path, "wb") as f:
-                            f.write(response.content)
-                        st.session_state.chart_path = chart_path
-                        st.session_state.last_chart_type = chart_type
-                        st.image(chart_path, use_container_width=True)
-                        st.success("✅ Chart generated!")
-                    else:
-                        st.error(f"Error: {response.text}")
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-        
-        if st.session_state.chart_path:
-            st.image(st.session_state.chart_path, use_container_width=True)
-            
-            with open(st.session_state.chart_path, "rb") as f:
-                st.download_button(
-                    label="📥 Download Chart (PNG)",
-                    data=f,
-                    file_name="chart.png",
-                    mime="image/png",
-                    use_container_width=True
-                )
-        
-        st.divider()
-        st.subheader("🤖 Explain This Chart")
-        
-        if st.button("📊 Explain This Chart with AI", use_container_width=True):
-            with st.spinner("🤖 AI is analyzing the chart..."):
-                try:
-                    chart_type = st.session_state.get('last_chart_type', 'Auto')
+                    # ============================================================
+                    # CHART TYPE SELECTION
+                    # ============================================================
                     
-                    response = requests.post(
-                        f"{st.session_state.api_url}/explain-chart",
-                        json={"chart_type": chart_type}
+                    chart_type = st.selectbox(
+                        "📊 Select Chart Type",
+                        ["Bar", "Pie", "Histogram", "Scatter", "Line", "Boxplot", "Heatmap"],
+                        key="chart_type_select"
                     )
-                    if response.status_code == 200:
-                        result = response.json()
-                        if result.get('success'):
-                            st.markdown(f"""
-                            <div class="ai-box">
-                                <h4>📊 Chart Analysis</h4>
-                                <p style="font-size: 1.05rem; line-height: 1.8;">{result.get('explanation', 'No explanation generated')}</p>
-                                <p style="font-size: 0.85rem; margin-top: 0.5rem; opacity: 0.8;">
-                                    Powered by {result.get('llm_provider', 'AI')}
-                                </p>
-                            </div>
-                            """, unsafe_allow_html=True)
+                    
+                    # ============================================================
+                    # X and Y Axis Selection
+                    # ============================================================
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if chart_type in ["Bar", "Scatter", "Line", "Boxplot"]:
+                            x_column = st.selectbox("📌 X-Axis", all_cols, key="x_axis_select")
+                        elif chart_type == "Pie":
+                            if categorical_cols:
+                                x_column = st.selectbox("📌 Category Column", categorical_cols, key="pie_column_select")
+                            else:
+                                x_column = st.selectbox("📌 Column", all_cols, key="pie_column_select")
+                                st.warning("⚠️ No categorical columns found. Pie chart may not be meaningful.")
+                        elif chart_type == "Histogram":
+                            if numeric_cols:
+                                x_column = st.selectbox("📌 Column", numeric_cols, key="histogram_column_select")
+                            else:
+                                x_column = st.selectbox("📌 Column", all_cols, key="histogram_column_select")
                         else:
-                            st.info("💡 " + result.get('explanation', 'AI explanation is not available.'))
-                    else:
-                        st.error(f"Error: {response.text}")
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-    
+                            x_column = None
+                    
+                    with col2:
+                        # FIXED: For Pie and Histogram, set y_column to None
+                        if chart_type in ["Bar", "Scatter", "Line"]:
+                            if numeric_cols:
+                                y_column = st.selectbox("📌 Y-Axis", numeric_cols, key="y_axis_select")
+                            else:
+                                y_column = st.selectbox("📌 Y-Axis", all_cols, key="y_axis_select")
+                        elif chart_type == "Boxplot":
+                            # For Boxplot, we need the column to plot
+                            if numeric_cols:
+                                y_column = st.selectbox("📌 Column", numeric_cols, key="boxplot_column_select")
+                            else:
+                                y_column = None
+                        elif chart_type in ["Pie", "Histogram", "Heatmap"]:
+                            y_column = None
+                        else:
+                            y_column = None
+                    
+                    # ============================================================
+                    # TRACK CHANGES
+                    # ============================================================
+                    
+                    # FIXED: initialize to the CURRENT selection (not None) so that
+                    # simply opening the Charts tab doesn't look like a "change" and
+                    # wipe out a chart that already exists (e.g. the auto chart
+                    # generated from the Dashboard tab, which shares chart_path).
+                    if 'previous_x' not in st.session_state:
+                        st.session_state.previous_x = x_column
+                    if 'previous_y' not in st.session_state:
+                        st.session_state.previous_y = y_column
+                    
+                    # Clear chart if X or Y changed
+                    if st.session_state.previous_x != x_column or st.session_state.previous_y != y_column:
+                        st.session_state.chart_path = None
+                        st.session_state.explain_chart = False
+                        st.session_state.previous_x = x_column
+                        st.session_state.previous_y = y_column
+                    
+                    # ============================================================
+                    # GENERATE CHART BUTTON
+                    # ============================================================
+                    
+                    if st.button("🎨 Generate Chart", use_container_width=True, type="primary"):
+                        with st.spinner("Generating chart..."):
+                            try:
+                                chart_data = {
+                                    'chart_type': chart_type.lower(),
+                                    'x_column': x_column,
+                                }
+                                
+                                # FIXED: Only add y_column if it's not None
+                                if y_column is not None:
+                                    chart_data['y_column'] = y_column
+                                
+                                response = requests.post(
+                                    f"{st.session_state.api_url}/generate-chart",
+                                    json=chart_data,
+                                    timeout=60
+                                )
+                                
+                                if response.status_code == 200:
+                                    os.makedirs("temp", exist_ok=True)
+                                    chart_filename = f"temp/{chart_type.lower()}_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                                    with open(chart_filename, "wb") as f:
+                                        f.write(response.content)
+                                    st.session_state.chart_path = chart_filename
+                                    st.session_state.last_chart_type = chart_type
+                                    st.session_state.last_x_column = x_column
+                                    st.session_state.last_y_column = y_column
+                                    st.session_state.explain_chart = False
+                                    
+                                    st.success("✅ Chart generated successfully!")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Error generating chart: {response.text}")
+                                    
+                            except Exception as e:
+                                st.error(f"Error: {str(e)}")
+                    
+                    # ============================================================
+                    # DISPLAY CHART
+                    # ============================================================
+                    
+                    if st.session_state.chart_path:
+                        st.image(st.session_state.chart_path, width="stretch")
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            with open(st.session_state.chart_path, "rb") as f:
+                                st.download_button(
+                                    label="📥 Download Chart (PNG)",
+                                    data=f,
+                                    file_name=f"chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                                    mime="image/png",
+                                    use_container_width=True
+                                )
+                        
+                        with col2:
+                            if st.button("📊 Explain This Chart", use_container_width=True):
+                                st.session_state.explain_chart = True
+                                st.rerun()
+                        
+                        # ============================================================
+                        # AI EXPLANATION
+                        # ============================================================
+                        
+                        if st.session_state.get('explain_chart', False):
+                            chart_type_display = st.session_state.get('last_chart_type', 'Auto')
+                            x_col = st.session_state.get('last_x_column', '')
+                            y_col = st.session_state.get('last_y_column', '')
+                            
+                            with st.spinner("🤖 AI is analyzing the chart..."):
+                                try:
+                                    # FIXED: Only send y_column if it exists
+                                    payload = {
+                                        "chart_type": chart_type_display,
+                                        "x_column": x_col
+                                    }
+                                    if y_col is not None:
+                                        payload["y_column"] = y_col
+                                    
+                                    response = requests.post(
+                                        f"{st.session_state.api_url}/explain-chart",
+                                        json=payload
+                                    )
+                                    if response.status_code == 200:
+                                        result = response.json()
+                                        if result.get('success'):
+                                            st.markdown(f"""
+                                            <div class="ai-box">
+                                                <h4>📊 Chart Analysis</h4>
+                                                <p style="font-size: 1.05rem; line-height: 1.8;">{result.get('explanation', 'No explanation generated')}</p>
+                                                <p style="font-size: 0.85rem; margin-top: 0.5rem; opacity: 0.8;">
+                                                    Powered by {result.get('llm_provider', 'AI')}
+                                                </p>
+                                            </div>
+                                            """, unsafe_allow_html=True)
+                                            st.session_state.explain_chart = False
+                                        else:
+                                            st.info("💡 " + result.get('explanation', 'AI explanation is not available.'))
+                                    else:
+                                        st.error(f"Error: {response.text}")
+                                except Exception as e:
+                                    st.error(f"Error: {str(e)}")
+                        
+                        # ============================================================
+                        # CHART TIPS
+                        # ============================================================
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        
+                        with st.expander("💡 Chart Tips"):
+                            st.markdown("""
+                            **📊 Chart Type Guide:**
+                            
+                            - **Bar Chart**: Best for comparing categories. X = Category, Y = Numeric Value
+                            - **Pie Chart**: Best for showing proportions. X = Category Column (Y not needed)
+                            - **Histogram**: Best for showing distribution. X = Numeric Column (Y not needed)
+                            - **Scatter Plot**: Best for showing relationships. X = Numeric, Y = Numeric
+                            - **Line Chart**: Best for showing trends. X = Numeric/Date, Y = Numeric
+                            - **Boxplot**: Best for showing data spread. X = Category, Y = Numeric
+                            - **Heatmap**: Best for showing correlations. Uses all numeric columns
+                            """)
+                    
+                else:
+                    st.info("No data available to generate charts.")
+                    
+        except Exception as e:
+            st.error(f"Error loading data: {str(e)}")
+
     # ================================================================
     # TAB 4: AI Explain
     # ================================================================
-    
+
     with tab4:
-        st.subheader("📊 Dataset Overview")
-        st.markdown("""
-        <p style="color: #64748b;">
-            Get a comprehensive AI-powered analysis of your entire dataset.
-        </p>
-        """, unsafe_allow_html=True)
+        st.subheader("🤖 AI Dataset Explanation")
         
-        if st.button("📊 Explain My Data with AI", use_container_width=True):
-            with st.spinner("🤖 AI is analyzing your dataset..."):
-                try:
-                    response = requests.post(f"{st.session_state.api_url}/explain-data")
-                    if response.status_code == 200:
-                        result = response.json()
-                        if result.get('success'):
+        if not st.session_state.data_loaded:
+            st.info("Please upload a dataset first to get AI explanation.")
+        else:
+            # Get current dataframe
+            try:
+                response = requests.get(f"{st.session_state.api_url}/full-dataset")
+                if response.status_code == 200:
+                    full_data = response.json()
+                    df = pd.DataFrame(full_data.get('data', []))
+                    
+                    if not df.empty:
+                        # ============================================================
+                        # EXPLANATION BUTTON
+                        # ============================================================
+                        
+                        st.markdown("""
+                        <p style="color: #8892b0; font-size: 0.95rem;">
+                            Get a comprehensive AI-powered explanation of your entire dataset.
+                            The AI will analyze each column, assess data quality, identify patterns, and provide actionable insights.
+                        </p>
+                        """, unsafe_allow_html=True)
+                        
+                        if st.button("📊 Explain My Data", use_container_width=True, type="primary"):
+                            with st.spinner("🤖 AI is analyzing your dataset in detail..."):
+                                try:
+                                    response = requests.post(f"{st.session_state.api_url}/explain-data")
+                                    if response.status_code == 200:
+                                        result = response.json()
+                                        if result.get('success'):
+                                            st.session_state.data_explanation = result.get('explanation', '')
+                                            st.session_state.explanation_generated = True
+                                            st.rerun()
+                                        else:
+                                            st.info("💡 " + result.get('explanation', 'AI explanation is not available.'))
+                                    else:
+                                        st.error(f"Error: {response.text}")
+                                except Exception as e:
+                                    st.error(f"Error: {str(e)}")
+                        
+                        # ============================================================
+                        # DISPLAY EXPLANATION
+                        # ============================================================
+                        
+                        if st.session_state.get('explanation_generated', False) and st.session_state.get('data_explanation', ''):
+                            
+                            st.divider()
+                            st.subheader("📊 AI Explanation")
+                            
                             st.markdown(f"""
                             <div class="ai-box">
-                                <h4>📊 Dataset Analysis</h4>
-                                <p style="font-size: 1.05rem; line-height: 1.8;">{result.get('explanation', 'No explanation generated')}</p>
+                                <h4>🤖 Dataset Analysis</h4>
+                                <p style="font-size: 1.05rem; line-height: 1.8;">{st.session_state.data_explanation}</p>
                                 <p style="font-size: 0.85rem; margin-top: 0.5rem; opacity: 0.8;">
-                                    Powered by {result.get('llm_provider', 'AI')}
+                                    Powered by {st.session_state.llm_provider}
                                 </p>
                             </div>
                             """, unsafe_allow_html=True)
-                        else:
-                            st.info("💡 " + result.get('explanation', 'AI explanation is not available.'))
+                            
+                            # ============================================================
+                            # DOWNLOAD & CLEAR BUTTONS
+                            # ============================================================
+                            
+                            st.divider()
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.download_button(
+                                    label="📥 Download Explanation (Text)",
+                                    data=st.session_state.data_explanation,
+                                    file_name=f"dataset_explanation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                                    mime="text/plain",
+                                    use_container_width=True
+                                )
+                            
+                            with col2:
+                                if st.button("🗑️ Clear Explanation", use_container_width=True):
+                                    st.session_state.data_explanation = ""
+                                    st.session_state.explanation_generated = False
+                                    st.rerun()
+                        
                     else:
-                        st.error(f"Error: {response.text}")
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                        st.info("No data available for analysis.")
+                        
+            except Exception as e:
+                st.error(f"Error loading data: {str(e)}")
     
     # ================================================================
-    # TAB 5: Export (UPGRADED)
-    # ================================================================
+    # TAB 5: Export
+    # ==================================================================
 
     with tab5:
         st.subheader("📄 Export Analysis")
@@ -1153,11 +1378,6 @@ else:
         if not st.session_state.data_loaded:
             st.info("Please upload a dataset first to export analysis.")
         else:
-            # Initialize cleaned_df if not exists
-            if 'cleaned_df' not in st.session_state:
-                st.session_state.cleaned_df = None
-            
-            # Get current dataframe
             try:
                 response = requests.get(f"{st.session_state.api_url}/full-dataset")
                 if response.status_code == 200:
@@ -1190,7 +1410,7 @@ else:
                                 <li>Data Quality Metrics</li>
                                 <li>AI-Generated Insights</li>
                                 <li>Executive Summary</li>
-                                <li>Chart with AI Explanation</li>
+                                <li>Current Chart with AI Explanation</li>
                             </ul>
                         </div>
                         """, unsafe_allow_html=True)
@@ -1198,7 +1418,41 @@ else:
                         if st.button("📊 Generate PDF Report", use_container_width=True):
                             with st.spinner("Generating comprehensive PDF report..."):
                                 try:
-                                    response = requests.get(f"{st.session_state.api_url}/export-pdf")
+                                    # Get chart info
+                                    chart_type = st.session_state.get('last_chart_type', 'Auto')
+                                    x_col = st.session_state.get('last_x_column', '')
+                                    y_col = st.session_state.get('last_y_column', '')
+                                    
+                                    # Get current chart
+                                    current_chart = st.session_state.get('chart_path', None)
+                                    
+                                    # ============================================================
+                                    # SEND CLEANED DATA TO BACKEND
+                                    # ============================================================
+                                    
+                                    # Prepare the cleaned data as CSV
+                                    csv_data = df.to_csv(index=False).encode('utf-8')
+                                    
+                                    files = {
+                                        'chart': open(current_chart, 'rb') if current_chart and os.path.exists(current_chart) else None,
+                                        'cleaned_data': ('cleaned_data.csv', csv_data, 'text/csv') if is_cleaned else None
+                                    }
+                                    # Remove None values
+                                    files = {k: v for k, v in files.items() if v is not None}
+                                    
+                                    # Send request with cleaned data
+                                    response = requests.post(
+                                        f"{st.session_state.api_url}/export-pdf",
+                                        data={
+                                            'chart_type': chart_type,
+                                            'x_column': x_col,
+                                            'y_column': y_col,
+                                            'use_cleaned': str(is_cleaned)
+                                        },
+                                        files=files,
+                                        timeout=60
+                                    )
+                                    
                                     if response.status_code == 200:
                                         os.makedirs("exports", exist_ok=True)
                                         filename = f"exports/analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
@@ -1237,9 +1491,7 @@ else:
                         if st.button("📥 Download Cleaned Dataset", use_container_width=True):
                             if is_cleaned:
                                 try:
-                                    # Convert cleaned dataframe to CSV
                                     csv_data = st.session_state.cleaned_df.to_csv(index=False)
-                                    
                                     st.success("✅ Cleaned dataset ready for download!")
                                     st.download_button(
                                         label="📥 Download CSV",
@@ -1262,11 +1514,11 @@ else:
                     
                     if is_cleaned:
                         st.success(f"✅ Dataset has been cleaned. {len(st.session_state.cleaned_df):,} rows, {len(st.session_state.cleaned_df.columns)} columns")
+                        st.info("📄 The PDF report will use the CLEANED data.")
                     else:
                         st.warning("⚠️ Dataset has not been cleaned yet. Visit the Data Cleaning tab to clean your data.")
+                        st.info("📄 The PDF report will use the ORIGINAL data.")
                         
-                else:
-                    st.error("Could not load dataset for export")
             except Exception as e:
                 st.error(f"Error loading data: {str(e)}")
     
@@ -1614,7 +1866,7 @@ else:
                             describe_df.loc[col, 'unique'] = df[col].nunique()
                             describe_df.loc[col, 'top'] = df[col].mode()[0] if not df[col].mode().empty else ''
                             describe_df.loc[col, 'freq'] = df[col].value_counts().iloc[0] if len(df[col].value_counts()) > 0 else 0
-                    st.dataframe(describe_df, use_container_width=True)
+                    st.dataframe(describe_df, width="stretch")
                 
                 st.divider()
                 
@@ -1644,7 +1896,7 @@ else:
                         }
                         numeric_stats.append(stats)
                     stats_df = pd.DataFrame(numeric_stats)
-                    st.dataframe(stats_df.round(2), use_container_width=True)
+                    st.dataframe(stats_df.round(2), width="stretch")
                 else:
                     st.info("No numeric columns found in the dataset.")
                 
@@ -1667,7 +1919,7 @@ else:
                                 'Count': value_counts.values,
                                 'Percentage': (value_counts.values / total * 100).round(2)
                             })
-                            st.dataframe(cat_df.head(10), use_container_width=True)
+                            st.dataframe(cat_df.head(10), width="stretch")
                             st.write(f"**Total categories:** {len(value_counts)}")
                             st.write(f"**Most common:** '{value_counts.index[0]}' ({value_counts.iloc[0]} occurrences, {(value_counts.iloc[0]/total*100):.1f}%)")
                     
@@ -1715,7 +1967,7 @@ else:
                             }
                     
                     outlier_df = pd.DataFrame(outlier_results)
-                    st.dataframe(outlier_df.round(2), use_container_width=True)
+                    st.dataframe(outlier_df.round(2), width="stretch")
                     
                     columns_with_outliers = outlier_df[outlier_df['Outliers Count'] > 0]
                     
@@ -1745,7 +1997,7 @@ else:
                                         'Status': ['⚠️ Outlier'] * len(values[:10])
                                     })
                                     st.write(f"**First 10 outlier values in `{col}`:**")
-                                    st.dataframe(outlier_vals_df, use_container_width=True, hide_index=True)
+                                    st.dataframe(outlier_vals_df, width="stretch", hide_index=True)
                                     if len(values) > 10:
                                         st.write(f"... and {len(values) - 10} more outliers")
                                     st.write(f"**Range of outliers:** {min(values):.2f} to {max(values):.2f}")
@@ -1759,6 +2011,7 @@ else:
                 # ============================================================
                 # SECTION 5: AI-GENERATED INSIGHTS
                 # ============================================================
+                st.divider()
                 st.subheader("🤖 AI-Generated Insights")
                 
                 if st.button("📊 Generate Insights from Data", use_container_width=True):
@@ -1784,97 +2037,6 @@ else:
                                 st.error(f"Error: {response.text}")
                         except Exception as e:
                             st.error(f"Error: {str(e)}")
-                
-                # ============================================================
-                # SECTION 6: EXECUTIVE SUMMARY
-                # ============================================================
-                st.divider()
-                st.subheader("📄 Executive Summary")
-
-                if st.button("📊 Generate Executive Summary", use_container_width=True):
-                    with st.spinner("Generating executive summary..."):
-                        # Get cleaned data
-                        if st.session_state.cleaned_df is not None:
-                            df_clean = st.session_state.cleaned_df
-                        else:
-                            response = requests.get(f"{st.session_state.api_url}/full-dataset")
-                            if response.status_code == 200:
-                                full_data = response.json()
-                                df_clean = pd.DataFrame(full_data.get('data', []))
-                            else:
-                                df_clean = df
-                        
-                        # Build detailed executive summary
-                        summary = f"""
-# 📊 Executive Summary Report
-
-## 1. Dataset Overview
-- **Total Records:** {len(df_clean):,}
-- **Total Columns:** {len(df_clean.columns)}
-- **Numeric Columns:** {len(df_clean.select_dtypes(include=[np.number]).columns)}
-- **Categorical Columns:** {len(df_clean.select_dtypes(include=['object']).columns)}
-- **Memory Usage:** {df_clean.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB
-
-## 2. Data Quality Metrics
-- **Duplicate Rows:** {df_clean.duplicated().sum():,} 
-- **Missing Values:** {df_clean.isnull().sum().sum():,}
-
-## 3. Numeric Columns Statistics
-"""
-                        numeric_cols = df_clean.select_dtypes(include=[np.number]).columns.tolist()
-                        for col in numeric_cols:
-                            summary += f"""
-### {col}
-- **Mean:** {df_clean[col].mean():.2f}
-- **Median:** {df_clean[col].median():.2f}
-- **Min:** {df_clean[col].min():.2f}
-- **Max:** {df_clean[col].max():.2f}
-- **Std Dev:** {df_clean[col].std():.2f}
-"""
-                        
-                        summary += "\n## 4. Categorical Columns Distribution\n"
-                        categorical_cols = df_clean.select_dtypes(include=['object']).columns.tolist()
-                        for col in categorical_cols[:5]:
-                            if len(df_clean[col].value_counts()) > 0:
-                                top = df_clean[col].value_counts().index[0]
-                                top_count = df_clean[col].value_counts().iloc[0]
-                                top_pct = (top_count / len(df_clean) * 100)
-                                summary += f"""
-### {col}
-- **Most Common:** {top}
-- **Count:** {top_count:,} ({top_pct:.1f}%)
-- **Total Categories:** {df_clean[col].nunique()}
-"""
-                        
-                        if hasattr(st.session_state, 'insights') and st.session_state.insights:
-                            summary += f"""
-## 5. AI-Generated Insights
-{st.session_state.insights}
-"""
-                        
-                        summary += f"""
-## 6. Outlier Detection Summary
-- **Method Used:** IQR (Interquartile Range)
-- **Threshold:** 1.5 × IQR
-
----
-*Report generated by AI Data Analysis Assistant on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
-"""
-                        
-                        st.markdown(summary, unsafe_allow_html=True)
-                        
-                        st.divider()
-                        
-                        # Centered Download Button
-                        col1, col2, col3 = st.columns([1, 2, 1])
-                        with col2:
-                            st.download_button(
-                                label="📥 Download Executive Summary (Markdown)",
-                                data=summary,
-                                file_name=f"executive_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                                mime="text/markdown",
-                                use_container_width=True
-                            )
             else:
                 st.error("Could not load dataset for statistics")
 

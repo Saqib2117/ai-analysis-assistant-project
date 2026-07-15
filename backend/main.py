@@ -3,13 +3,16 @@ FastAPI Backend for AI Data Analysis Assistant
 With DeepSeek LLM Integration + Chart Explanation
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
+from utils.helpers import get_dataset_summary
 import pandas as pd
 import numpy as np
 import os
+import io
 import shutil
 import matplotlib
 matplotlib.use('Agg')
@@ -78,7 +81,7 @@ def call_llm(prompt):
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.3,
-            "max_tokens": 800
+            "max_tokens": 1200
         }
         
         response = requests.post(
@@ -131,7 +134,8 @@ class QuestionRequest(BaseModel):
 
 class ChartExplanationRequest(BaseModel):
     chart_type: str = "Auto"
-
+    x_column: Optional[str] = None
+    y_column: Optional[str] = None
 # ================================================================
 # API Endpoints
 # ================================================================
@@ -215,7 +219,6 @@ async def get_full_dataset():
         raise HTTPException(status_code=400, detail="No data loaded")
     
     try:
-        # Convert the entire dataframe to dict
         df_dict = analyzer.df.to_dict('records')
         columns = analyzer.df.columns.tolist()
         
@@ -288,6 +291,609 @@ async def get_specific_chart(
     
     return FileResponse(chart_path, media_type="image/png")
 
+@app.post("/generate-chart")
+async def generate_chart(request: dict):
+    """Generate chart based on user selection"""
+    if not analyzer.is_loaded:
+        raise HTTPException(status_code=400, detail="No data loaded")
+    
+    try:
+        chart_type = request.get('chart_type', 'bar')
+        x_column = request.get('x_column')
+        y_column = request.get('y_column')  # This can be None for Pie/Histogram
+        title = request.get('title')
+        color_palette = request.get('color_palette', 'viridis')
+        
+        df = analyzer.df
+        
+        # ============================================================
+        # HANDLE DIFFERENT CHART TYPES
+        # ============================================================
+        
+        # For Pie chart - y_column is not needed
+        if chart_type == 'pie':
+            if not x_column:
+                x_column = df.select_dtypes(include=['object']).columns[0] if len(df.select_dtypes(include=['object']).columns) > 0 else df.columns[0]
+            chart_path = generate_pie_chart(df, x_column, title, color_palette)
+        
+        # For Histogram - y_column is not needed
+        elif chart_type == 'histogram':
+            if not x_column:
+                x_column = df.select_dtypes(include=[np.number]).columns[0] if len(df.select_dtypes(include=[np.number]).columns) > 0 else df.columns[0]
+            chart_path = generate_histogram_chart(df, x_column, title, color_palette)
+        
+        # For Boxplot - FIXED: pass BOTH x_column (category to group by) and
+        # y_column (numeric value) so a proper grouped boxplot is generated
+        # instead of only ever plotting x_column.
+        elif chart_type == 'boxplot':
+            chart_path = generate_boxplot_chart(df, x_column, y_column, title, color_palette)
+        
+        # For Bar chart - needs x and y
+        elif chart_type == 'bar':
+            if not x_column:
+                x_column = df.columns[0]
+            if not y_column:
+                y_column = df.select_dtypes(include=[np.number]).columns[0] if len(df.select_dtypes(include=[np.number]).columns) > 0 else df.columns[0]
+            chart_path = generate_bar_chart(df, x_column, y_column, title, color_palette)
+        
+        # For Scatter plot - needs x and y
+        elif chart_type == 'scatter':
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            if not x_column:
+                x_column = numeric_cols[0] if len(numeric_cols) > 0 else df.columns[0]
+            if not y_column:
+                y_column = numeric_cols[1] if len(numeric_cols) > 1 else numeric_cols[0]
+            chart_path = generate_scatter_chart(df, x_column, y_column, title, color_palette)
+        
+        # For Line chart - needs x and y
+        elif chart_type == 'line':
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            if not x_column:
+                x_column = numeric_cols[0] if len(numeric_cols) > 0 else df.columns[0]
+            if not y_column:
+                y_column = numeric_cols[1] if len(numeric_cols) > 1 else numeric_cols[0]
+            chart_path = generate_line_chart(df, x_column, y_column, title, color_palette)
+        
+        # For Heatmap - no x or y needed
+        elif chart_type == 'heatmap':
+            chart_path = generate_heatmap_chart(df, title, color_palette)
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported chart type: {chart_type}")
+        
+        return FileResponse(chart_path, media_type="image/png")
+    
+    except Exception as e:
+        print(f"Chart generation error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================================================================
+# CHART GENERATOR FUNCTIONS
+# ================================================================
+
+def generate_bar_chart(df, x_col, y_col, title=None, palette="viridis"):
+    """Generate bar chart"""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Aggregate data
+    data = df.groupby(x_col)[y_col].sum().sort_values(ascending=False).head(15)
+    
+    # FIX: Use plt.colormaps.get_cmap() instead of plt.cm.get_cmap()
+    cmap = plt.colormaps.get_cmap(palette)
+    colors = cmap(np.linspace(0.2, 0.8, len(data)))
+    
+    bars = ax.bar(data.index.astype(str), data.values, color=colors, edgecolor='black', linewidth=0.5)
+    
+    ax.set_title(title or f"{y_col} by {x_col}", fontsize=14, fontweight='bold')
+    ax.set_xlabel(x_col, fontsize=12)
+    ax.set_ylabel(y_col, fontsize=12)
+    plt.xticks(rotation=45, ha='right')
+    
+    # Add value labels
+    for bar, value in zip(bars, data.values):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                f'{value:,.0f}', ha='center', va='bottom', fontsize=9)
+    
+    plt.tight_layout()
+    
+    filename = f"charts/bar_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+    return filename
+
+def generate_pie_chart(df, col, title=None, palette="Set3"):
+    """Generate pie chart"""
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    data = df[col].value_counts().head(8)
+    
+    # FIX: Use plt.colormaps.get_cmap() instead of plt.cm.get_cmap()
+    cmap = plt.colormaps.get_cmap(palette)
+    colors = cmap(np.linspace(0, 1, len(data)))
+    
+    wedges, texts, autotexts = ax.pie(
+        data.values, 
+        labels=data.index.astype(str), 
+        autopct='%1.1f%%',
+        colors=colors,
+        startangle=90,
+        explode=[0.02] * len(data)
+    )
+    
+    ax.set_title(title or f"Distribution of {col}", fontsize=14, fontweight='bold')
+    
+    for text in texts:
+        text.set_fontsize(11)
+    for autotext in autotexts:
+        autotext.set_color('white')
+        autotext.set_fontsize(11)
+        autotext.set_fontweight('bold')
+    
+    plt.tight_layout()
+    
+    filename = f"charts/pie_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+    return filename
+
+def generate_histogram_chart(df, col, title=None, palette="viridis"):
+    """Generate histogram"""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    n, bins, patches = ax.hist(df[col].dropna(), bins=20, alpha=0.7, edgecolor='black', linewidth=0.5)
+    
+    # FIX: Use plt.colormaps.get_cmap() instead of plt.cm.get_cmap()
+    cmap = plt.colormaps.get_cmap(palette)
+    colors = cmap(np.linspace(0.2, 0.8, len(patches)))
+    for patch, color in zip(patches, colors):
+        patch.set_facecolor(color)
+    
+    ax.axvline(df[col].mean(), color='red', linestyle='dashed', linewidth=2, label=f'Mean: {df[col].mean():.2f}')
+    ax.axvline(df[col].median(), color='green', linestyle='dashed', linewidth=2, label=f'Median: {df[col].median():.2f}')
+    
+    ax.set_title(title or f"Distribution of {col}", fontsize=14, fontweight='bold')
+    ax.set_xlabel(col, fontsize=12)
+    ax.set_ylabel("Frequency", fontsize=12)
+    ax.legend()
+    
+    plt.tight_layout()
+    
+    filename = f"charts/histogram_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+    return filename
+
+def generate_scatter_chart(df, x_col, y_col, title=None, palette="viridis"):
+    """Generate scatter plot"""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    color_col = None
+    for col in numeric_cols:
+        if col not in [x_col, y_col]:
+            color_col = col
+            break
+    
+    if color_col:
+        scatter = ax.scatter(df[x_col], df[y_col], c=df[color_col], cmap=palette, alpha=0.6, s=50, edgecolor='black', linewidth=0.5)
+        plt.colorbar(scatter, label=color_col)
+    else:
+        ax.scatter(df[x_col], df[y_col], color='#2E86AB', alpha=0.6, s=50, edgecolor='black', linewidth=0.5)
+    
+    ax.set_title(title or f"{y_col} vs {x_col}", fontsize=14, fontweight='bold')
+    ax.set_xlabel(x_col, fontsize=12)
+    ax.set_ylabel(y_col, fontsize=12)
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    filename = f"charts/scatter_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+    return filename
+
+def generate_line_chart(df, x_col, y_col, title=None, palette="viridis"):
+    """Generate line chart"""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    if pd.api.types.is_numeric_dtype(df[x_col]):
+        sorted_df = df.sort_values(x_col)
+        ax.plot(sorted_df[x_col], sorted_df[y_col], 'o-', color='#2E86AB', linewidth=2, markersize=6)
+    else:
+        ax.plot(df[x_col], df[y_col], 'o-', color='#2E86AB', linewidth=2, markersize=6)
+    
+    ax.fill_between(df[x_col], df[y_col], alpha=0.1)
+    ax.set_title(title or f"{y_col} vs {x_col} (Line Chart)", fontsize=14, fontweight='bold')
+    ax.set_xlabel(x_col, fontsize=12)
+    ax.set_ylabel(y_col, fontsize=12)
+    plt.xticks(rotation=45, ha='right')
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    filename = f"charts/line_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+    return filename
+
+def generate_boxplot_chart(df, x_column=None, y_column=None, title=None, palette="viridis"):
+    """Generate boxplot.
+
+    FIXED: previously this only ever accepted a single column, so giving both
+    an X (category) and Y (numeric) column silently dropped the Y column and
+    only plotted X. Now, when both a category column (x_column) and a numeric
+    column (y_column) are provided, a proper grouped boxplot is generated
+    (y_column's distribution split out per x_column category). Falls back to
+    a single-column boxplot, or a boxplot of all numeric columns, if only one
+    or neither is given.
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    has_x = x_column and x_column in df.columns
+    has_y = y_column and y_column in df.columns
+
+    if has_x and has_y and x_column != y_column:
+        df.boxplot(column=y_column, by=x_column, ax=ax)
+        ax.set_title(title or f"Boxplot of {y_column} by {x_column}", fontsize=14, fontweight='bold')
+        ax.set_xlabel(x_column, fontsize=12)
+        ax.set_ylabel(y_column, fontsize=12)
+        plt.suptitle('')  # remove pandas' auto-added "Boxplot grouped by ..." subtitle
+        plt.xticks(rotation=45, ha='right')
+    elif has_y:
+        df.boxplot(column=y_column, ax=ax)
+        ax.set_title(title or f"Boxplot of {y_column}", fontsize=14, fontweight='bold')
+        ax.set_ylabel(y_column, fontsize=12)
+    elif has_x:
+        df.boxplot(column=x_column, ax=ax)
+        ax.set_title(title or f"Boxplot of {x_column}", fontsize=14, fontweight='bold')
+        ax.set_ylabel(x_column, fontsize=12)
+    else:
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        df[numeric_cols].boxplot(ax=ax)
+        ax.set_title(title or "Boxplot of Numeric Columns", fontsize=14, fontweight='bold')
+        plt.xticks(rotation=45, ha='right')
+    
+    plt.tight_layout()
+    
+    filename = f"charts/boxplot_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+    return filename
+
+def generate_heatmap_chart(df, title=None, palette="coolwarm"):
+    """Generate correlation heatmap"""
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    if len(numeric_cols) < 2:
+        return generate_histogram_chart(df, numeric_cols[0] if len(numeric_cols) > 0 else df.columns[0], title)
+    
+    fig, ax = plt.subplots(figsize=(12, 10))
+    corr = df[numeric_cols].corr()
+    
+    mask = np.triu(np.ones_like(corr, dtype=bool))
+    sns.heatmap(
+        corr, 
+        mask=mask, 
+        annot=True, 
+        fmt='.2f', 
+        cmap=palette,
+        square=True, 
+        linewidths=0.5, 
+        ax=ax,
+        cbar_kws={"shrink": 0.8}
+    )
+    
+    ax.set_title(title or "Correlation Heatmap", fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    
+    filename = f"charts/heatmap_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+    return filename
+
+def build_chart_context(df, chart_type, x_col, y_col, numeric_cols, categorical_cols, summary):
+    """Build a data context string describing what a given chart shows.
+    Used to feed the AI explanation prompt for both the /explain-chart endpoint
+    and the PDF export, so every chart type (Pie, Histogram, Boxplot, Scatter,
+    Line, Heatmap, Bar, Auto) gets real data context even when only one of
+    x_col/y_col is provided.
+    """
+    chart_context = ""
+    
+    # ============================================================
+    # PIE CHART (FIXED)
+    # ============================================================
+    if chart_type == "Pie":
+        if x_col:
+            # Get the actual data for the pie chart
+            value_counts = df[x_col].value_counts()
+            total = len(df)
+            
+            chart_context = f"""
+CHART TYPE: Pie Chart
+CATEGORY COLUMN: {x_col}
+TOTAL RECORDS: {len(df):,}
+
+DISTRIBUTION (Top categories):
+"""
+            for cat, count in value_counts.head(8).items():
+                pct = (count / total) * 100
+                chart_context += f"- {cat}: {count:,} ({pct:.1f}%)\n"
+            
+            # Add summary
+            top_category = value_counts.index[0]
+            top_count = value_counts.iloc[0]
+            top_pct = (top_count / total) * 100
+            chart_context += f"\nThe largest category is '{top_category}' with {top_count:,} occurrences ({top_pct:.1f}% of the data)."
+            
+        elif categorical_cols:
+            cat_col = categorical_cols[0]
+            value_counts = df[cat_col].value_counts()
+            total = len(df)
+            
+            chart_context = f"""
+CHART TYPE: Pie Chart
+CATEGORY COLUMN: {cat_col}
+TOTAL RECORDS: {len(df):,}
+
+DISTRIBUTION (Top categories):
+"""
+            for cat, count in value_counts.head(8).items():
+                pct = (count / total) * 100
+                chart_context += f"- {cat}: {count:,} ({pct:.1f}%)\n"
+            
+            top_category = value_counts.index[0]
+            top_count = value_counts.iloc[0]
+            top_pct = (top_count / total) * 100
+            chart_context += f"\nThe largest category is '{top_category}' with {top_count:,} occurrences ({top_pct:.1f}% of the data)."
+        else:
+            chart_context = "No categorical column found for Pie Chart."
+
+    # ============================================================
+    # BAR CHART
+    # ============================================================
+    elif chart_type == "Bar":
+        if x_col and y_col:
+            top_5 = df.groupby(x_col)[y_col].sum().sort_values(ascending=False).head(5)
+            chart_context = f"""
+CHART TYPE: Bar Chart
+X-AXIS: {x_col}
+Y-AXIS: {y_col}
+TOTAL RECORDS: {len(df):,}
+
+TOP 5 CATEGORIES:
+"""
+            for cat, val in top_5.items():
+                chart_context += f"- {cat}: {val:,.0f}\n"
+            
+            top = top_5.index[0]
+            top_val = top_5.values[0]
+            chart_context += f"\nThe highest {y_col} is from '{top}' with {top_val:,.0f}."
+        elif categorical_cols and numeric_cols:
+            cat_col = categorical_cols[0]
+            num_col = numeric_cols[0]
+            top_5 = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False).head(5)
+            chart_context = f"""
+CHART TYPE: Bar Chart
+X-AXIS: {cat_col}
+Y-AXIS: {num_col}
+TOTAL RECORDS: {len(df):,}
+
+TOP 5 CATEGORIES:
+"""
+            for cat, val in top_5.items():
+                chart_context += f"- {cat}: {val:,.0f}\n"
+            
+            top = top_5.index[0]
+            top_val = top_5.values[0]
+            chart_context += f"\nThe highest {num_col} is from '{top}' with {top_val:,.0f}."
+
+    # ============================================================
+    # HISTOGRAM
+    # ============================================================
+    elif chart_type == "Histogram":
+        if x_col:
+            stats = summary.get('numeric_stats', {}).get(x_col, {})
+            chart_context = f"""
+CHART TYPE: Histogram
+COLUMN: {x_col}
+TOTAL RECORDS: {len(df):,}
+
+KEY STATISTICS:
+- Min: {stats.get('min', 'N/A')}
+- Max: {stats.get('max', 'N/A')}
+- Mean: {stats.get('mean', 'N/A'):.2f}
+- Median: {stats.get('median', 'N/A'):.2f}
+- Standard Deviation: {stats.get('std', 'N/A'):.2f}
+"""
+        elif numeric_cols:
+            col = numeric_cols[0]
+            stats = summary.get('numeric_stats', {}).get(col, {})
+            chart_context = f"""
+CHART TYPE: Histogram
+COLUMN: {col}
+TOTAL RECORDS: {len(df):,}
+
+KEY STATISTICS:
+- Min: {stats.get('min', 'N/A')}
+- Max: {stats.get('max', 'N/A')}
+- Mean: {stats.get('mean', 'N/A'):.2f}
+- Median: {stats.get('median', 'N/A'):.2f}
+"""
+
+    # ============================================================
+    # SCATTER PLOT
+    # ============================================================
+    elif chart_type == "Scatter":
+        if x_col and y_col:
+            chart_context = f"""
+CHART TYPE: Scatter Plot
+X-AXIS: {x_col}
+Y-AXIS: {y_col}
+TOTAL POINTS: {len(df):,}
+
+STATISTICS:
+- {x_col}: Min={df[x_col].min():.2f}, Max={df[x_col].max():.2f}, Mean={df[x_col].mean():.2f}
+- {y_col}: Min={df[y_col].min():.2f}, Max={df[y_col].max():.2f}, Mean={df[y_col].mean():.2f}
+"""
+        elif len(numeric_cols) >= 2:
+            col1 = numeric_cols[0]
+            col2 = numeric_cols[1]
+            chart_context = f"""
+CHART TYPE: Scatter Plot
+X-AXIS: {col1}
+Y-AXIS: {col2}
+TOTAL POINTS: {len(df):,}
+"""
+
+    # ============================================================
+    # LINE CHART
+    # ============================================================
+    elif chart_type == "Line":
+        if x_col and y_col:
+            chart_context = f"""
+CHART TYPE: Line Chart
+X-AXIS: {x_col}
+Y-AXIS: {y_col}
+TOTAL POINTS: {len(df):,}
+"""
+        elif len(numeric_cols) >= 2:
+            col1 = numeric_cols[0]
+            col2 = numeric_cols[1]
+            chart_context = f"""
+CHART TYPE: Line Chart
+X-AXIS: {col1}
+Y-AXIS: {col2}
+TOTAL POINTS: {len(df):,}
+"""
+
+    # ============================================================
+    # BOXPLOT
+    # ============================================================
+    elif chart_type == "Boxplot":
+        if x_col and y_col and x_col in df.columns and y_col in df.columns and x_col != y_col:
+            # Grouped boxplot: x_col is the category to group by, y_col is the
+            # numeric column being distributed. This matches generate_boxplot_chart's
+            # df.boxplot(column=y_col, by=x_col) behavior, so the explanation
+            # reflects both axes shown on the actual chart.
+            grouped = df.groupby(x_col)[y_col]
+            group_stats = grouped.describe()[['min', '25%', '50%', '75%', 'max', 'mean']]
+            group_stats = group_stats.sort_values('50%', ascending=False).head(8)
+
+            chart_context = f"""
+CHART TYPE: Boxplot (grouped)
+CATEGORY (X-AXIS): {x_col}
+VALUE (Y-AXIS): {y_col}
+TOTAL RECORDS: {len(df):,}
+NUMBER OF GROUPS: {df[x_col].nunique()}
+
+PER-GROUP STATISTICS (top groups by median, sorted descending):
+"""
+            for cat, row in group_stats.iterrows():
+                chart_context += (
+                    f"- {cat}: Min={row['min']:.2f}, Q1={row['25%']:.2f}, "
+                    f"Median={row['50%']:.2f}, Q3={row['75%']:.2f}, "
+                    f"Max={row['max']:.2f}, Mean={row['mean']:.2f}\n"
+                )
+
+            top_group = group_stats.index[0]
+            top_median = group_stats.iloc[0]['50%']
+            chart_context += f"\nThe group with the highest median {y_col} is '{top_group}' (median: {top_median:.2f})."
+
+        elif y_col:
+            stats = summary.get('numeric_stats', {}).get(y_col, {})
+            q1 = df[y_col].quantile(0.25) if y_col in df.columns else stats.get('min', 'N/A')
+            q3 = df[y_col].quantile(0.75) if y_col in df.columns else stats.get('max', 'N/A')
+            chart_context = f"""
+CHART TYPE: Boxplot
+COLUMN: {y_col}
+TOTAL RECORDS: {len(df):,}
+
+KEY STATISTICS:
+- Min: {stats.get('min', 'N/A')}
+- Max: {stats.get('max', 'N/A')}
+- Mean: {stats.get('mean', 'N/A'):.2f}
+- Median: {stats.get('median', 'N/A'):.2f}
+- Q1: {q1 if isinstance(q1, str) else f'{q1:.2f}'}
+- Q3: {q3 if isinstance(q3, str) else f'{q3:.2f}'}
+"""
+        elif x_col:
+            stats = summary.get('numeric_stats', {}).get(x_col, {})
+            chart_context = f"""
+CHART TYPE: Boxplot
+COLUMN: {x_col}
+TOTAL RECORDS: {len(df):,}
+
+KEY STATISTICS:
+- Min: {stats.get('min', 'N/A')}
+- Max: {stats.get('max', 'N/A')}
+- Mean: {stats.get('mean', 'N/A'):.2f}
+- Median: {stats.get('median', 'N/A'):.2f}
+"""
+
+    # ============================================================
+    # HEATMAP
+    # ============================================================
+    elif chart_type == "Heatmap":
+        chart_context = f"""
+CHART TYPE: Heatmap
+NUMERIC COLUMNS: {', '.join(numeric_cols[:10])}
+TOTAL RECORDS: {len(df):,}
+"""
+
+    # ============================================================
+    # AUTO (Default)
+    # ============================================================
+    else:
+        if categorical_cols and numeric_cols:
+            cat_col = categorical_cols[0]
+            num_col = numeric_cols[0]
+            top_5 = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False).head(5)
+            chart_context = f"""
+CHART TYPE: Bar Chart (Auto-detected)
+X-AXIS: {cat_col}
+Y-AXIS: {num_col}
+TOTAL RECORDS: {len(df):,}
+
+TOP 5 CATEGORIES:
+"""
+            for cat, val in top_5.items():
+                chart_context += f"- {cat}: {val:,.0f}\n"
+        elif categorical_cols:
+            cat_col = categorical_cols[0]
+            value_counts = df[cat_col].value_counts()
+            chart_context = f"""
+CHART TYPE: Pie Chart (Auto-detected)
+COLUMN: {cat_col}
+TOTAL RECORDS: {len(df):,}
+
+DISTRIBUTION:
+"""
+            for cat, count in value_counts.head(5).items():
+                pct = (count / len(df)) * 100
+                chart_context += f"- {cat}: {count} ({pct:.1f}%)\n"
+        elif numeric_cols:
+            col = numeric_cols[0]
+            stats = summary.get('numeric_stats', {}).get(col, {})
+            chart_context = f"""
+CHART TYPE: Histogram (Auto-detected)
+COLUMN: {col}
+TOTAL RECORDS: {len(df):,}
+
+KEY STATISTICS:
+- Min: {stats.get('min', 'N/A')}
+- Max: {stats.get('max', 'N/A')}
+- Mean: {stats.get('mean', 'N/A'):.2f}
+- Median: {stats.get('median', 'N/A'):.2f}
+"""
+        else:
+            chart_context = "No suitable data found for chart."
+
+
+    return chart_context
+
 @app.post("/explain-chart")
 async def explain_chart(request: ChartExplanationRequest = None):
     """Generate AI explanation for the current chart"""
@@ -302,172 +908,43 @@ async def explain_chart(request: ChartExplanationRequest = None):
         })
     
     try:
-        # Get chart type from request
         chart_type = "Auto"
-        if request and request.chart_type:
+        x_col = None
+        y_col = None
+        
+        if request:
             chart_type = request.chart_type
+            x_col = request.x_column
+            y_col = request.y_column
         
         df = analyzer.df
         summary = analyzer.get_summary()
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
         
-        # --- BUILD CHART DESCRIPTION ---
-        chart_info = ""
+        # ============================================================
+        # BUILD CHART CONTEXT BASED ON CHART TYPE
+        # ============================================================
         
-        # ============================================================
-        # PIE CHART
-        # ============================================================
-        if chart_type == "Pie":
-            if categorical_cols:
-                cat_col = categorical_cols[0]
-                top_5 = df[cat_col].value_counts().head(5)
-                
-                chart_info = f"""
-CHART TYPE: Pie Chart
-COLUMN: {cat_col}
-TOTAL RECORDS: {len(df)}
+        chart_context = build_chart_context(df, chart_type, x_col, y_col, numeric_cols, categorical_cols, summary)
 
-DISTRIBUTION:
-"""
-                for cat, count in top_5.items():
-                    pct = (count / len(df)) * 100
-                    chart_info += f"- {cat}: {count} ({pct:.1f}%)\n"
-                
-                # Add total
-                chart_info += f"\nTotal: {len(df)} records"
-            else:
-                chart_info = "ERROR: No categorical column found for Pie Chart. Please use a column with text/category values."
-
-        # ============================================================
-        # BAR CHART
-        # ============================================================
-        elif chart_type == "Bar":
-            if categorical_cols and numeric_cols:
-                cat_col = categorical_cols[0]
-                num_col = numeric_cols[0]
-                top_5 = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False).head(5)
-                
-                chart_info = f"""
-CHART TYPE: Bar Chart
-X-AXIS: {cat_col}
-Y-AXIS: {num_col}
-TOTAL RECORDS: {len(df)}
-
-TOP 5 CATEGORIES:
-"""
-                for cat, val in top_5.items():
-                    chart_info += f"- {cat}: {val:,.0f}\n"
-            else:
-                chart_info = "ERROR: Need at least one categorical column and one numeric column for Bar Chart."
-
-        # ============================================================
-        # HISTOGRAM
-        # ============================================================
-        elif chart_type == "Histogram":
-            if numeric_cols:
-                col = numeric_cols[0]
-                stats = summary.get('numeric_stats', {}).get(col, {})
-                
-                chart_info = f"""
-CHART TYPE: Histogram
-COLUMN: {col}
-TOTAL RECORDS: {len(df)}
-
-KEY STATISTICS:
-- Min: {stats.get('min', 'N/A')}
-- Max: {stats.get('max', 'N/A')}
-- Mean: {stats.get('mean', 'N/A'):.2f}
-- Median: {stats.get('median', 'N/A'):.2f}
-- Standard Deviation: {stats.get('std', 'N/A'):.2f}
-"""
-            else:
-                chart_info = "ERROR: No numeric column found for Histogram."
-
-        # ============================================================
-        # SCATTER PLOT
-        # ============================================================
-        elif chart_type == "Scatter":
-            if len(numeric_cols) >= 2:
-                col1 = numeric_cols[0]
-                col2 = numeric_cols[1]
-                chart_info = f"""
-CHART TYPE: Scatter Plot
-X-AXIS: {col1}
-Y-AXIS: {col2}
-TOTAL POINTS: {len(df)}
-
-KEY STATISTICS:
-- {col1}: Min={df[col1].min():.2f}, Max={df[col1].max():.2f}, Mean={df[col1].mean():.2f}
-- {col2}: Min={df[col2].min():.2f}, Max={df[col2].max():.2f}, Mean={df[col2].mean():.2f}
-"""
-            else:
-                chart_info = "ERROR: Need at least 2 numeric columns for Scatter Plot."
-
-        # ============================================================
-        # AUTO (Default)
-        # ============================================================
-        else:
-            if len(categorical_cols) >= 1 and len(numeric_cols) >= 1:
-                cat_col = categorical_cols[0]
-                num_col = numeric_cols[0]
-                top_5 = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False).head(5)
-                
-                chart_info = f"""
-CHART TYPE: Bar Chart (Auto-detected)
-X-AXIS: {cat_col}
-Y-AXIS: {num_col}
-TOTAL RECORDS: {len(df)}
-
-TOP 5 CATEGORIES:
-"""
-                for cat, val in top_5.items():
-                    chart_info += f"- {cat}: {val:,.0f}\n"
-            elif len(categorical_cols) >= 1:
-                cat_col = categorical_cols[0]
-                top_5 = df[cat_col].value_counts().head(5)
-                
-                chart_info = f"""
-CHART TYPE: Pie Chart (Auto-detected)
-COLUMN: {cat_col}
-TOTAL RECORDS: {len(df)}
-
-DISTRIBUTION:
-"""
-                for cat, count in top_5.items():
-                    pct = (count / len(df)) * 100
-                    chart_info += f"- {cat}: {count} ({pct:.1f}%)\n"
-            elif len(numeric_cols) >= 1:
-                col = numeric_cols[0]
-                stats = summary.get('numeric_stats', {}).get(col, {})
-                chart_info = f"""
-CHART TYPE: Histogram (Auto-detected)
-COLUMN: {col}
-TOTAL RECORDS: {len(df)}
-
-KEY STATISTICS:
-- Min: {stats.get('min', 'N/A')}
-- Max: {stats.get('max', 'N/A')}
-- Mean: {stats.get('mean', 'N/A'):.2f}
-- Median: {stats.get('median', 'N/A'):.2f}
-"""
-            else:
-                chart_info = "ERROR: No suitable data found for chart."
 
         # ============================================================
         # BUILD PROMPT
         # ============================================================
+        
         prompt = f"""
 You are a data analysis expert. Analyze this chart and explain what it shows.
 
-{chart_info}
+{chart_context}
 
 Please provide:
 1. What this chart shows in simple terms (1-2 sentences)
 2. The most prominent observation from this chart (1 sentence)
 3. One key insight from this chart (1 sentence)
 
-Keep it short and focused ONLY on the chart.
+IMPORTANT: Use the exact column names: {x_col if x_col else 'N/A'}
+ONLY talk about the data in this chart. Keep it short and focused.
 """
         
         llm_response = call_llm(prompt)
@@ -481,7 +958,7 @@ Keep it short and focused ONLY on the chart.
         else:
             return JSONResponse({
                 "success": False,
-                "explanation": "⚠️ Failed to generate explanation.",
+                "explanation": f"⚠️ Failed to generate explanation for {chart_type} chart.",
                 "llm_available": False
             })
     
@@ -494,7 +971,7 @@ Keep it short and focused ONLY on the chart.
 
 @app.post("/explain-data")
 async def explain_data():
-    """Generate AI explanation for the entire dataset"""
+    """Generate comprehensive AI explanation for the entire dataset"""
     if not analyzer.is_loaded:
         raise HTTPException(status_code=400, detail="No data loaded")
     
@@ -506,52 +983,121 @@ async def explain_data():
         })
     
     try:
+        df = analyzer.df
         summary = analyzer.get_summary()
-        columns_info = ", ".join(summary.get('column_names', []))
-        total_rows = summary.get('total_rows', 0)
         
-        # Get numeric stats
+        # Basic info
+        total_rows = summary.get('total_rows', 0)
+        total_cols = summary.get('total_columns', 0)
+        columns_info = summary.get('column_names', [])
+        
+        # Column details
+        column_details = ""
+        for col in columns_info:
+            dtype = summary.get('data_types', {}).get(col, 'unknown')
+            missing = summary.get('missing_values', {}).get(col, 0)
+            missing_pct = summary.get('missing_percentage', {}).get(col, 0)
+            column_details += f"- **{col}**: {dtype} (Missing: {missing} / {missing_pct:.1f}%)\n"
+        
+        # Numeric stats
         numeric_stats = summary.get('numeric_stats', {})
         stats_text = ""
         for col, stats in numeric_stats.items():
-            stats_text += f"- {col}: min={stats['min']}, max={stats['max']}, mean={stats['mean']:.2f}, median={stats['median']:.2f}\n"
+            stats_text += f"- **{col}**: Min={stats['min']:.2f}, Max={stats['max']:.2f}, Mean={stats['mean']:.2f}, Median={stats['median']:.2f}, Std={stats['std']:.2f}\n"
         
-        # Get categorical columns
+        # Categorical stats
         categorical_cols = [col for col, dtype in summary.get('data_types', {}).items() if dtype == 'object']
-        cat_text = ", ".join(categorical_cols) if categorical_cols else "None"
+        cat_text = ""
+        for col in categorical_cols[:5]:
+            top_values = df[col].value_counts().head(3)
+            cat_text += f"- **{col}**: {dict(top_values)}\n"
         
-        # Get sample data
-        sample_data = analyzer.df.head(5).to_string()
+        # Data quality
+        duplicates = df.duplicated().sum()
+        missing_total = df.isnull().sum().sum()
+        total_cells = len(df) * len(df.columns)
+        quality_score = ((total_cells - missing_total - duplicates) / total_cells) * 100
+        
+        # Sample data
+        sample_data = df.head(5).to_string()
         
         prompt = f"""
-        You are a data analysis expert. Analyze the following dataset and provide a comprehensive, easy-to-understand explanation.
+        You are a senior data analyst. Provide a COMPREHENSIVE, DETAILED explanation of the following dataset.
         
-        DATASET OVERVIEW:
-        - Total Rows: {total_rows}
-        - Columns: {columns_info}
-        - Categorical Columns: {cat_text}
+        ============================================================
+        DATASET OVERVIEW
+        ============================================================
+        Total Rows: {total_rows:,}
+        Total Columns: {total_cols}
+        Columns: {', '.join(columns_info)}
         
-        NUMERIC STATISTICS:
-        {stats_text}
+        ============================================================
+        COLUMN DETAILS
+        ============================================================
+        {column_details}
         
-        SAMPLE DATA (First 5 rows):
+        ============================================================
+        NUMERIC COLUMNS STATISTICS
+        ============================================================
+        {stats_text if stats_text else 'No numeric columns found.'}
+        
+        ============================================================
+        CATEGORICAL COLUMNS (Top 3 values)
+        ============================================================
+        {cat_text if cat_text else 'No categorical columns found.'}
+        
+        ============================================================
+        DATA QUALITY
+        ============================================================
+        - Data Quality Score: {quality_score:.1f}%
+        - Duplicate Rows: {duplicates:,}
+        - Missing Values: {missing_total:,}
+        - Total Cells: {total_cells:,}
+        - Missing Percentage: {(missing_total / total_cells * 100):.2f}%
+        
+        ============================================================
+        SAMPLE DATA (First 5 rows)
+        ============================================================
         {sample_data}
         
-        Please provide a complete analysis with:
+        ============================================================
+        ANALYSIS REQUIREMENTS
+        ============================================================
+        Please provide a COMPREHENSIVE analysis with the following sections:
         
-        1. DATASET OVERVIEW (2-3 sentences):
-           What kind of data is this? What does it represent?
+        1. DATASET OVERVIEW (3-4 sentences):
+           - What does this dataset represent?
+           - What is the purpose of this data?
+           - What are the main variables?
         
-        2. KEY STATISTICS (2-3 bullet points):
-           Highlight the most important numbers from the data.
+        2. COLUMN-BY-COLUMN ANALYSIS (for each column):
+           - Explain what each column represents
+           - What type of data it contains
+           - Key observations from the data
         
-        3. NOTABLE PATTERNS (2-3 bullet points):
-           What interesting patterns or relationships do you see?
+        3. DATA QUALITY ASSESSMENT (2-3 bullet points):
+           - Assess the completeness and cleanliness
+           - Mention any issues (missing values, duplicates, outliers)
+           - Suggestions for data cleaning
         
-        4. SUMMARY (1-2 sentences):
-           A simple summary that a non-technical person would understand.
+        4. KEY INSIGHTS (3-4 bullet points):
+           - Most important patterns you observe
+           - Relationships between columns
+           - Surprising findings
         
-        Make it professional but easy to understand.
+        5. STATISTICAL HIGHLIGHTS (2-3 bullet points):
+           - Key numbers from the data
+           - Important averages, ranges, distributions
+        
+        6. POTENTIAL USE CASES (2-3 bullet points):
+           - What could this data be used for?
+           - What kind of analysis would be valuable?
+           - What business questions could it answer?
+        
+        7. SUMMARY (2-3 sentences):
+           - Simple summary for non-technical stakeholders
+        
+        Make it professional, comprehensive, and easy to understand.
         """
         
         llm_response = call_llm(prompt)
@@ -565,7 +1111,7 @@ async def explain_data():
         else:
             return JSONResponse({
                 "success": False,
-                "explanation": "⚠️ Failed to generate explanation.",
+                "explanation": "⚠️ Failed to generate explanation. Please check your DeepSeek API key.",
                 "llm_available": False
             })
     
@@ -576,124 +1122,229 @@ async def explain_data():
             "llm_available": False
         })
 
-@app.get("/export-pdf")
-async def export_pdf():
-    """Export analysis as PDF (Bonus Feature)"""
+@app.post("/export-pdf")
+async def export_pdf(
+    request: Request,
+    chart_type: str = Form("Auto"),
+    x_column: str = Form(None),
+    y_column: str = Form(None),
+    use_cleaned: str = Form("false"),
+    chart: UploadFile = File(None),
+    cleaned_data: UploadFile = File(None)
+):
+    """Export comprehensive analysis as PDF using current chart and data"""
     if not analyzer.is_loaded:
         raise HTTPException(status_code=400, detail="No data loaded")
     
-    global chart_path
-    if not chart_path:
-        chart_gen = ChartGenerator(analyzer.df)
-        chart_path = chart_gen.generate_chart()
-    
-    from reportlab.lib.pagesizes import letter
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.utils import ImageReader
-    from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT
-    from reportlab.lib.pagesizes import letter
-    import io
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    pdf_path = f"analysis_report_{timestamp}.pdf"
-    
-    # Create PDF
-    doc = SimpleDocTemplate(pdf_path, pagesize=letter)
-    styles = getSampleStyleSheet()
-    story = []
-    
-    # 1. Title
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=24,
-        textColor=colors.HexColor('#667eea'),
-        alignment=TA_CENTER,
-        spaceAfter=20
-    )
-    story.append(Paragraph("📊 AI Data Analysis Report", title_style))
-    story.append(Spacer(1, 10))
-    
-    # 2. Metadata
-    meta_style = ParagraphStyle(
-        'MetaStyle',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.grey,
-        alignment=TA_CENTER
-    )
-    summary = analyzer.get_summary()
-    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Rows: {summary.get('total_rows', 0)} | Columns: {summary.get('total_columns', 0)}", meta_style))
-    story.append(Spacer(1, 20))
-    
-    # 3. Dataset Summary
-    summary_style = ParagraphStyle(
-        'SummaryStyle',
-        parent=styles['Heading2'],
-        fontSize=16,
-        textColor=colors.HexColor('#333333'),
-        spaceAfter=10
-    )
-    story.append(Paragraph("📋 Dataset Summary", summary_style))
-    
-    # Summary table
-    summary_data = [
-        ["Metric", "Value"],
-        ["Total Records", f"{summary.get('total_rows', 0):,}"],
-        ["Total Columns", f"{summary.get('total_columns', 0)}"],
-        ["Duplicate Rows", f"{summary.get('duplicate_rows', 0)}"],
-        ["Missing Values", f"{sum(summary.get('missing_values', {}).values()):,}"],
-    ]
-    
-    summary_table = Table(summary_data, colWidths=[200, 200])
-    summary_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (1, 0), colors.HexColor('#667eea')),
-        ('TEXTCOLOR', (0, 0), (1, 0), colors.white),
-        ('ALIGN', (0, 0), (1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (1, 0), 12),
-        ('BACKGROUND', (0, 1), (1, -1), colors.beige),
-        ('GRID', (0, 0), (1, -1), 1, colors.grey),
-    ]))
-    story.append(summary_table)
-    story.append(Spacer(1, 20))
-    
-    # 4. Columns
-    col_style = ParagraphStyle(
-        'ColStyle',
-        parent=styles['Heading2'],
-        fontSize=16,
-        textColor=colors.HexColor('#333333'),
-        spaceAfter=10
-    )
-    story.append(Paragraph("📑 Columns", col_style))
-    
-    columns = summary.get('column_names', [])
-    col_data = [["#", "Column Name"]]
-    for i, col in enumerate(columns, 1):
-        col_data.append([str(i), col])
-    
-    col_table = Table(col_data, colWidths=[50, 350])
-    col_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (1, 0), colors.HexColor('#667eea')),
-        ('TEXTCOLOR', (0, 0), (1, 0), colors.white),
-        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (1, 0), 10),
-        ('BOTTOMPADDING', (0, 0), (1, 0), 10),
-        ('BACKGROUND', (0, 1), (1, -1), colors.beige),
-        ('GRID', (0, 0), (1, -1), 1, colors.grey),
-        ('FONTSIZE', (0, 1), (1, -1), 9),
-    ]))
-    story.append(col_table)
-    story.append(Spacer(1, 20))
-    
-    # 5. Numeric Statistics
-    if summary.get('numeric_stats'):
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.utils import ImageReader
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
+        from reportlab.lib.pagesizes import letter
+        import io
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pdf_path = f"analysis_report_{timestamp}.pdf"
+        
+        # ================================================================
+        # USE CLEANED DATA IF PROVIDED
+        # ================================================================
+        
+        is_cleaned = use_cleaned.lower() == "true"
+        
+        # Get the dataframe - use cleaned data if provided
+        df = analyzer.df  # Default to original
+        
+        if cleaned_data and cleaned_data.filename:
+            try:
+                content = await cleaned_data.read()
+                df = pd.read_csv(io.BytesIO(content))
+                print(f"✅ Using CLEANED data: {len(df)} rows")
+            except Exception as e:
+                print(f"Error reading cleaned data: {e}")
+                df = analyzer.df
+                is_cleaned = False
+        else:
+            df = analyzer.df
+        
+        # Get summary from the data
+        summary = analyzer.get_summary()
+        
+        # Get column info
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+        
+        # Calculate quality metrics
+        total_cells = len(df) * len(df.columns)
+        missing_cells = df.isnull().sum().sum()
+        quality_score = ((total_cells - missing_cells - df.duplicated().sum()) / total_cells) * 100
+        
+        # ================================================================
+        # HANDLE CHART
+        # ================================================================
+        
+        chart_path = None
+        
+        if chart and chart.filename:
+            chart_path = f"charts/user_chart_{timestamp}.png"
+            with open(chart_path, "wb") as f:
+                f.write(await chart.read())
+        else:
+            chart_gen = ChartGenerator(df)
+            chart_path = chart_gen.generate_chart()
+        
+        # ================================================================
+        # BUILD PDF
+        # ================================================================
+        
+        doc = SimpleDocTemplate(pdf_path, pagesize=letter)
+        styles = getSampleStyleSheet()
+        story = []
+        
+        # ================================================================
+        # PAGE 1: TITLE, OVERVIEW, QUALITY, COLUMNS
+        # ================================================================
+        
+        # 1. TITLE
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#667eea'),
+            alignment=TA_CENTER,
+            spaceAfter=10
+        )
+        story.append(Paragraph("📊 AI Data Analysis Report", title_style))
+        story.append(Spacer(1, 5))
+        
+        # 2. METADATA
+        meta_style = ParagraphStyle(
+            'MetaStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=colors.grey,
+            alignment=TA_CENTER
+        )
+        story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", meta_style))
+        story.append(Paragraph(f"Dataset: {len(df):,} rows, {len(df.columns)} columns", meta_style))
+        
+        if is_cleaned:
+            story.append(Paragraph("<b>✅ Dataset is CLEANED</b>", meta_style))
+        else:
+            story.append(Paragraph("<i>⚠️ Dataset is ORIGINAL (not cleaned)</i>", meta_style))
+        
+        story.append(Spacer(1, 20))
+        
+        # 3. DATASET OVERVIEW
+        overview_style = ParagraphStyle(
+            'OverviewStyle',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#333333'),
+            spaceAfter=10
+        )
+        story.append(Paragraph("1. Dataset Overview", overview_style))
+        
+        summary_data = [
+            ["Metric", "Value"],
+            ["Total Records", f"{len(df):,}"],
+            ["Total Columns", f"{len(df.columns)}"],
+            ["Numeric Columns", f"{len(numeric_cols)}"],
+            ["Categorical Columns", f"{len(categorical_cols)}"],
+            ["Duplicate Rows", f"{df.duplicated().sum():,}"],
+            ["Missing Values", f"{missing_cells:,}"],
+            ["Data Quality Score", f"{quality_score:.1f}%"],
+            ["Cleaning Status", "✅ Cleaned" if is_cleaned else "⚠️ Original"],
+        ]
+        
+        summary_table = Table(summary_data, colWidths=[200, 200])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (1, 0), colors.HexColor('#667eea')),
+            ('TEXTCOLOR', (0, 0), (1, 0), colors.white),
+            ('ALIGN', (0, 0), (1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (1, 0), 12),
+            ('BACKGROUND', (0, 1), (1, -1), colors.beige),
+            ('GRID', (0, 0), (1, -1), 1, colors.grey),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 20))
+        
+        # 4. DATA QUALITY METRICS
+        quality_style = ParagraphStyle(
+            'QualityStyle',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#333333'),
+            spaceAfter=10
+        )
+        story.append(Paragraph("2. Data Quality Metrics", quality_style))
+        
+        quality_data = [
+            ["Metric", "Value"],
+            ["Data Quality Score", f"{quality_score:.1f}%"],
+            ["Total Cells", f"{total_cells:,}"],
+            ["Missing Cells", f"{missing_cells:,}"],
+            ["Missing Percentage", f"{(missing_cells / total_cells * 100):.2f}%"],
+            ["Duplicate Rows", f"{df.duplicated().sum():,}"],
+        ]
+        
+        quality_table = Table(quality_data, colWidths=[200, 200])
+        quality_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (1, 0), colors.HexColor('#667eea')),
+            ('TEXTCOLOR', (0, 0), (1, 0), colors.white),
+            ('ALIGN', (0, 0), (1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (1, 0), 12),
+            ('BACKGROUND', (0, 1), (1, -1), colors.beige),
+            ('GRID', (0, 0), (1, -1), 1, colors.grey),
+        ]))
+        story.append(quality_table)
+        story.append(Spacer(1, 20))
+        
+        # 5. COLUMNS
+        col_style = ParagraphStyle(
+            'ColStyle',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#333333'),
+            spaceAfter=10
+        )
+        story.append(Paragraph("3. Columns", col_style))
+        
+        columns = summary.get('column_names', [])
+        col_data = [["#", "Column Name", "Data Type"]]
+        for i, col in enumerate(columns, 1):
+            dtype = summary.get('data_types', {}).get(col, 'unknown')
+            col_data.append([str(i), col, dtype])
+        
+        col_table = Table(col_data, colWidths=[40, 200, 120])
+        col_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (2, 0), colors.HexColor('#667eea')),
+            ('TEXTCOLOR', (0, 0), (2, 0), colors.white),
+            ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (2, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (2, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (2, 0), 10),
+            ('BACKGROUND', (0, 1), (2, -1), colors.beige),
+            ('GRID', (0, 0), (2, -1), 1, colors.grey),
+            ('FONTSIZE', (0, 1), (2, -1), 9),
+        ]))
+        story.append(col_table)
+        story.append(Spacer(1, 20))
+        
+        # ================================================================
+        # PAGE 2: NUMERIC STATISTICS, CATEGORICAL STATISTICS, PREVIEW
+        # ================================================================
+        story.append(PageBreak())
+        
+        # 6. NUMERIC STATISTICS
         num_style = ParagraphStyle(
             'NumStyle',
             parent=styles['Heading2'],
@@ -701,37 +1352,221 @@ async def export_pdf():
             textColor=colors.HexColor('#333333'),
             spaceAfter=10
         )
-        story.append(Paragraph("📊 Numeric Statistics", num_style))
+        story.append(Paragraph("4. Numeric Statistics", num_style))
         
-        # Show top 5 numeric columns
-        num_stats = summary.get('numeric_stats', {})
-        num_data = [["Column", "Min", "Max", "Mean", "Median"]]
-        for col, stats in list(num_stats.items())[:5]:
-            num_data.append([
-                col,
-                f"{stats.get('min', 0):.2f}",
-                f"{stats.get('max', 0):.2f}",
-                f"{stats.get('mean', 0):.2f}",
-                f"{stats.get('median', 0):.2f}"
-            ])
-        
-        num_table = Table(num_data, colWidths=[120, 80, 80, 80, 80])
-        num_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (4, 0), colors.HexColor('#667eea')),
-            ('TEXTCOLOR', (0, 0), (4, 0), colors.white),
-            ('ALIGN', (0, 0), (4, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (4, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (4, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (4, 0), 10),
-            ('BACKGROUND', (0, 1), (4, -1), colors.beige),
-            ('GRID', (0, 0), (4, -1), 1, colors.grey),
-            ('FONTSIZE', (0, 1), (4, -1), 9),
-        ]))
-        story.append(num_table)
+        if summary.get('numeric_stats'):
+            num_stats = summary.get('numeric_stats', {})
+            num_data = [["Column", "Min", "Max", "Mean", "Median", "Std Dev"]]
+            for col, stats in list(num_stats.items())[:10]:
+                num_data.append([
+                    col,
+                    f"{stats.get('min', 0):.2f}",
+                    f"{stats.get('max', 0):.2f}",
+                    f"{stats.get('mean', 0):.2f}",
+                    f"{stats.get('median', 0):.2f}",
+                    f"{stats.get('std', 0):.2f}"
+                ])
+            
+            num_table = Table(num_data, colWidths=[100, 70, 70, 70, 70, 70])
+            num_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (5, 0), colors.HexColor('#667eea')),
+                ('TEXTCOLOR', (0, 0), (5, 0), colors.white),
+                ('ALIGN', (0, 0), (5, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (5, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (5, 0), 9),
+                ('BOTTOMPADDING', (0, 0), (5, 0), 8),
+                ('BACKGROUND', (0, 1), (5, -1), colors.beige),
+                ('GRID', (0, 0), (5, -1), 1, colors.grey),
+                ('FONTSIZE', (0, 1), (5, -1), 8),
+            ]))
+            story.append(num_table)
+        else:
+            story.append(Paragraph("No numeric columns found.", styles['Normal']))
         story.append(Spacer(1, 20))
-    
-    # 6. Chart
-    if chart_path:
+        
+        # 7. CATEGORICAL STATISTICS
+        cat_style = ParagraphStyle(
+            'CatStyle',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#333333'),
+            spaceAfter=10
+        )
+        story.append(Paragraph("5. Categorical Statistics", cat_style))
+        
+        if categorical_cols:
+            for col in categorical_cols[:3]:
+                story.append(Paragraph(f"<b>{col}</b>", styles['Normal']))
+                value_counts = df[col].value_counts().head(5)
+                cat_data = [["Value", "Count", "Percentage"]]
+                for val, count in value_counts.items():
+                    pct = (count / len(df)) * 100
+                    cat_data.append([str(val), str(count), f"{pct:.1f}%"])
+                
+                cat_table = Table(cat_data, colWidths=[200, 100, 100])
+                cat_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (2, 0), colors.HexColor('#667eea')),
+                    ('TEXTCOLOR', (0, 0), (2, 0), colors.white),
+                    ('ALIGN', (0, 0), (2, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (2, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (2, 0), 10),
+                    ('BOTTOMPADDING', (0, 0), (2, 0), 8),
+                    ('BACKGROUND', (0, 1), (2, -1), colors.beige),
+                    ('GRID', (0, 0), (2, -1), 1, colors.grey),
+                    ('FONTSIZE', (0, 1), (2, -1), 9),
+                ]))
+                story.append(cat_table)
+                story.append(Spacer(1, 10))
+            
+            if len(categorical_cols) > 3:
+                story.append(Paragraph(f"<i>... and {len(categorical_cols) - 3} more categorical columns</i>", styles['Normal']))
+        else:
+            story.append(Paragraph("No categorical columns found.", styles['Normal']))
+        story.append(Spacer(1, 20))
+        
+        # 8. DATASET PREVIEW
+        preview_style = ParagraphStyle(
+            'PreviewStyle',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#333333'),
+            spaceAfter=10
+        )
+        story.append(Paragraph("6. Dataset Preview (First 5 Rows)", preview_style))
+        
+        preview_cols = df.columns.tolist()
+        if len(preview_cols) > 8:
+            preview_cols = preview_cols[:8]
+            story.append(Paragraph("<i>Showing first 8 columns only</i>", styles['Normal']))
+        
+        preview_data = [preview_cols]
+        for _, row in df.head(5).iterrows():
+            preview_data.append([str(val)[:12] for val in row[preview_cols].values])
+        
+        col_width = min(70, 500 // len(preview_cols))
+        preview_table = Table(preview_data, colWidths=[col_width] * len(preview_cols))
+        preview_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 4),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTSIZE', (0, 1), (-1, -1), 5),
+        ]))
+        story.append(preview_table)
+        story.append(Spacer(1, 20))
+        
+        # ================================================================
+        # PAGE 3: AI INSIGHTS, CHART, EXECUTIVE SUMMARY
+        # ================================================================
+        story.append(PageBreak())
+        
+        # 9. AI-GENERATED INSIGHTS
+        ai_style = ParagraphStyle(
+            'AIStyle',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#333333'),
+            spaceAfter=10
+        )
+        story.append(Paragraph("7. AI-Generated Insights", ai_style))
+        
+        try:
+            prompt = f"""
+            You are a data analysis expert. Analyze the following dataset and provide a comprehensive, easy-to-understand explanation.
+            
+            DATASET OVERVIEW:
+            - Total Rows: {len(df)}
+            - Columns: {', '.join(df.columns.tolist())}
+            - Numeric Columns: {len(numeric_cols)}
+            - Categorical Columns: {len(categorical_cols)}
+            
+            KEY STATISTICS:
+            - Data Quality Score: {quality_score:.1f}%
+            - Duplicate Rows: {df.duplicated().sum()}
+            - Missing Values: {df.isnull().sum().sum()}
+            
+            IMPORTANT: Do NOT use Markdown formatting.
+            
+            Structure your response exactly like this:
+            
+            DATASET OVERVIEW:
+            [Write 2-3 sentences]
+            
+            KEY FINDINGS:
+            - [Finding 1]
+            - [Finding 2]
+            - [Finding 3]
+            - [Finding 4]
+            
+            NOTABLE PATTERNS:
+            - [Pattern 1]
+            - [Pattern 2]
+            - [Pattern 3]
+            
+            RECOMMENDATIONS:
+            - [Recommendation 1]
+            - [Recommendation 2]
+            - [Recommendation 3]
+            """
+            
+            llm_response = call_llm(prompt)
+            
+            if llm_response:
+                para_style = ParagraphStyle(
+                    'InsightPara',
+                    parent=styles['Normal'],
+                    fontSize=10,
+                    textColor=colors.HexColor('#333333'),
+                    alignment=TA_JUSTIFY,
+                    spaceAfter=6
+                )
+                
+                section_style = ParagraphStyle(
+                    'SectionStyle',
+                    parent=styles['Normal'],
+                    fontSize=11,
+                    textColor=colors.HexColor('#667eea'),
+                    fontName='Helvetica-Bold',
+                    spaceAfter=4
+                )
+                
+                bullet_style = ParagraphStyle(
+                    'BulletStyle',
+                    parent=styles['Normal'],
+                    fontSize=10,
+                    textColor=colors.HexColor('#333333'),
+                    alignment=TA_JUSTIFY,
+                    spaceAfter=3,
+                    leftIndent=20
+                )
+                
+                lines = llm_response.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        story.append(Spacer(1, 4))
+                        continue
+                    
+                    if line.isupper() and len(line) > 10:
+                        story.append(Paragraph(f"<b>{line}</b>", section_style))
+                    elif line.startswith('-') or line.startswith('•'):
+                        clean_line = line.lstrip('-• ').strip()
+                        story.append(Paragraph(f"• {clean_line}", bullet_style))
+                    else:
+                        story.append(Paragraph(line, para_style))
+                
+                story.append(Spacer(1, 10))
+            else:
+                story.append(Paragraph("AI insights not available. Please check your DeepSeek API key.", styles['Normal']))
+        except Exception as e:
+            story.append(Paragraph(f"AI insights not available: {str(e)}", styles['Normal']))
+        story.append(Spacer(1, 20))
+        
+        # 10. CHART
         chart_style = ParagraphStyle(
             'ChartStyle',
             parent=styles['Heading2'],
@@ -739,29 +1574,110 @@ async def export_pdf():
             textColor=colors.HexColor('#333333'),
             spaceAfter=10
         )
-        story.append(Paragraph("📈 Chart", chart_style))
-        try:
-            img = ImageReader(chart_path)
-            from reportlab.platypus import Image
-            img_width = 500
-            img_height = 300
-            story.append(Image(chart_path, width=img_width, height=img_height))
-        except:
-            story.append(Paragraph("Chart not available", styles['Normal']))
+        story.append(Paragraph("8. Chart with AI Explanation", chart_style))
+        
+        if chart_path and os.path.exists(chart_path):
+            try:
+                from reportlab.platypus import Image
+                img = ImageReader(chart_path)
+                story.append(Image(chart_path, width=500, height=280))
+                story.append(Spacer(1, 10))
+                
+                chart_exp_style = ParagraphStyle(
+                    'ChartExpStyle',
+                    parent=styles['Normal'],
+                    fontSize=10,
+                    textColor=colors.HexColor('#333333'),
+                    alignment=TA_JUSTIFY,
+                    spaceAfter=6
+                )
+                
+                # FIXED: use the same context builder as /explain-chart so every
+                # chart type (Pie, Histogram, Boxplot, Scatter, Line, Heatmap, Bar,
+                # Auto) gets real data context, not just Bar/Auto with both axes set.
+                chart_context = build_chart_context(df, chart_type, x_column, y_column, numeric_cols, categorical_cols, summary)
+                
+                chart_prompt = f"""
+                You are a data analysis expert. Analyze this chart and provide a clear, informative explanation.
+                
+                CHART TYPE: {chart_type}
+                {chart_context}
+                
+                Provide a 2-3 sentence explanation that:
+                1. Tells what this chart shows
+                2. Points out the most important observation
+                3. Gives one key insight
+                """
+                
+                chart_exp = call_llm(chart_prompt)
+                if chart_exp:
+                    story.append(Paragraph(f"<b>Chart Analysis:</b> {chart_exp}", chart_exp_style))
+                else:
+                    story.append(Paragraph("Chart analysis not available.", chart_exp_style))
+                    
+            except Exception as e:
+                story.append(Paragraph(f"Chart not available: {str(e)}", styles['Normal']))
+        else:
+            story.append(Paragraph("No chart generated. Please generate a chart first.", styles['Normal']))
         story.append(Spacer(1, 20))
+        
+        # 11. EXECUTIVE SUMMARY
+        exec_style = ParagraphStyle(
+            'ExecStyle',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#333333'),
+            spaceAfter=10
+        )
+        story.append(Paragraph("9. Executive Summary", exec_style))
+        
+        exec_summary = f"""
+        <b>Dataset Overview:</b> This dataset contains {len(df):,} records with {len(df.columns)} columns.
+        It includes {len(numeric_cols)} numeric and {len(categorical_cols)} categorical columns.
+        The data quality score is {quality_score:.1f}%, with {df.duplicated().sum():,} duplicate rows
+        and {df.isnull().sum().sum():,} missing values.
+        <br/><br/>
+        <b>Key Findings:</b>
+        """
+        for col in numeric_cols[:5]:
+            exec_summary += f"• <b>{col}:</b> Mean={df[col].mean():.2f}, Median={df[col].median():.2f}, Max={df[col].max():.2f}<br/>"
+        
+        exec_para_style = ParagraphStyle(
+            'ExecParaStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=colors.HexColor('#333333'),
+            alignment=TA_JUSTIFY,
+            spaceAfter=6
+        )
+        story.append(Paragraph(exec_summary, exec_para_style))
+        story.append(Spacer(1, 20))
+        
+        # 12. FOOTER
+        footer_style = ParagraphStyle(
+            'FooterStyle',
+            parent=styles['Normal'],
+            fontSize=8,
+            textColor=colors.grey,
+            alignment=TA_CENTER
+        )
+        story.append(Paragraph("Report generated by AI Data Analysis Assistant", footer_style))
+        story.append(Paragraph(f"© {datetime.now().year} Saylani Hackathon | All Rights Reserved", footer_style))
+        
+        # Build PDF
+        doc.build(story)
+        
+        # Clean up temporary files
+        if chart and chart.filename and os.path.exists(chart_path):
+            try:
+                os.remove(chart_path)
+            except:
+                pass
+        
+        return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
     
-    # 7. Footer
-    footer_style = ParagraphStyle(
-        'FooterStyle',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.grey,
-        alignment=TA_CENTER
-    )
-    story.append(Paragraph("Report generated by AI Data Analysis Assistant", footer_style))
-    story.append(Paragraph("© 2026 Saylani Hackathon", footer_style))
-    
-    # Build PDF
-    doc.build(story)
-    
-    return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
+    except Exception as e:
+        print(f"PDF Generation Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
