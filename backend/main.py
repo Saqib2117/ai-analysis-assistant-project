@@ -64,8 +64,15 @@ if DEEPSEEK_API_KEY and DEEPSEEK_API_KEY.startswith("sk-"):
 else:
     print("⚠️ DEEPSEEK_API_KEY not found. Set it in .env file or Hugging Face Secrets.")
 
-def call_llm(prompt):
-    """Call DeepSeek API"""
+def call_llm(prompt, max_tokens=1200):
+    """Call DeepSeek API.
+
+    FIXED: max_tokens was previously hardcoded at 1200 for every call site,
+    including the comprehensive 7-section /explain-data report, which caused
+    it to get cut off mid-sentence before reaching Key Insights, Statistical
+    Highlights, Use Cases, or the final Summary. Now callers can request a
+    larger budget for longer structured reports.
+    """
     if not LLM_AVAILABLE:
         return None
     
@@ -81,7 +88,7 @@ def call_llm(prompt):
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.3,
-            "max_tokens": 1200
+            "max_tokens": max_tokens
         }
         
         response = requests.post(
@@ -181,6 +188,63 @@ async def upload_csv(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/apply-cleaned-data")
+async def apply_cleaned_data(file: UploadFile = File(...)):
+    """Make an uploaded (frontend-cleaned) CSV the ACTIVE dataset for all
+    analysis - Q&A, AI Explain, Statistics & Insights, and Charts - not just
+    PDF export.
+
+    ADDED: previously cleaning only lived in the Streamlit frontend's session
+    state and was never sent back to the backend except as a one-off file
+    for /export-pdf, so every other feature kept answering from the
+    original uncleaned data even after the user cleaned it (e.g. reporting
+    the original row count instead of the post-cleaning row count).
+    """
+    if not analyzer.is_loaded:
+        raise HTTPException(status_code=400, detail="No data loaded")
+
+    try:
+        content = await file.read()
+        df = pd.read_csv(io.BytesIO(content))
+        analyzer.set_active_data(df)
+
+        summary = analyzer.get_summary()
+        serializable_summary = convert_to_serializable(summary)
+
+        return JSONResponse({
+            "success": True,
+            "message": f"Cleaned dataset is now active: {len(df):,} rows",
+            "summary": serializable_summary,
+            "is_cleaned": True
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/reset-to-original")
+async def reset_to_original():
+    """Revert the active dataset back to the originally uploaded data,
+    so Q&A/AI Explain/Insights/Charts go back to reporting on the
+    original (uncleaned) row count and values."""
+    if not analyzer.is_loaded:
+        raise HTTPException(status_code=400, detail="No data loaded")
+
+    success = analyzer.reset_to_original()
+    if not success:
+        raise HTTPException(status_code=400, detail="No original data available to reset to")
+
+    summary = analyzer.get_summary()
+    serializable_summary = convert_to_serializable(summary)
+
+    return JSONResponse({
+        "success": True,
+        "message": f"Reverted to original dataset: {len(analyzer.df):,} rows",
+        "summary": serializable_summary,
+        "is_cleaned": False
+    })
+
 @app.get("/summary")
 async def get_summary():
     """Get dataset summary"""
@@ -222,6 +286,35 @@ async def get_full_dataset():
         df_dict = analyzer.df.to_dict('records')
         columns = analyzer.df.columns.tolist()
         
+        return JSONResponse({
+            "success": True,
+            "data": df_dict,
+            "columns": columns,
+            "rows": len(df_dict)
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/original-dataset")
+async def get_original_dataset():
+    """Get the ORIGINAL (pre-cleaning) dataset, regardless of what is
+    currently active.
+
+    ADDED: /full-dataset always returns the currently ACTIVE dataset, which
+    becomes the cleaned data after /apply-cleaned-data is called. The Data
+    Cleaning tab's "Original Rows" vs "Cleaned Rows" comparison needs the
+    TRUE original for this to be meaningful - without this endpoint, that
+    comparison was comparing the cleaned data against itself, making real
+    cleaning (e.g. duplicates actually removed) look like "no rows removed".
+    """
+    if not analyzer.is_loaded:
+        raise HTTPException(status_code=400, detail="No data loaded")
+
+    try:
+        original_df = analyzer.original_df if analyzer.original_df is not None else analyzer.df
+        df_dict = original_df.to_dict('records')
+        columns = original_df.columns.tolist()
+
         return JSONResponse({
             "success": True,
             "data": df_dict,
@@ -1006,7 +1099,12 @@ async def explain_data():
             stats_text += f"- **{col}**: Min={stats['min']:.2f}, Max={stats['max']:.2f}, Mean={stats['mean']:.2f}, Median={stats['median']:.2f}, Std={stats['std']:.2f}\n"
         
         # Categorical stats
-        categorical_cols = [col for col, dtype in summary.get('data_types', {}).items() if dtype == 'object']
+        # FIXED: previously filtered summary['data_types'] for the literal
+        # string 'object', which silently returns empty if that helper
+        # stores dtypes differently - causing the AI to see zero categorical
+        # context even on datasets with 9 categorical columns. Compute
+        # directly from the dataframe instead, which is always correct.
+        categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
         cat_text = ""
         for col in categorical_cols[:5]:
             top_values = df[col].value_counts().head(3)
@@ -1100,7 +1198,7 @@ async def explain_data():
         Make it professional, comprehensive, and easy to understand.
         """
         
-        llm_response = call_llm(prompt)
+        llm_response = call_llm(prompt, max_tokens=2500)
         
         if llm_response:
             return JSONResponse({
@@ -1115,6 +1213,128 @@ async def explain_data():
                 "llm_available": False
             })
     
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "explanation": f"Error: {str(e)}",
+            "llm_available": False
+        })
+
+@app.post("/generate-insights")
+async def generate_insights():
+    """Generate statistics-focused AI insights for the Statistics & Insights tab.
+
+    ADDED: previously this tab reused /explain-data, which is meant for the
+    AI Explain tab and gives a column-by-column breakdown. This endpoint
+    gives a distinct, statistics-focused structure instead: Data Overview,
+    Data Statistics, Key Findings, Noticeable Patterns, Data Summary.
+    """
+    if not analyzer.is_loaded:
+        raise HTTPException(status_code=400, detail="No data loaded")
+
+    if not LLM_AVAILABLE:
+        return JSONResponse({
+            "success": False,
+            "explanation": "DeepSeek API key not configured.",
+            "llm_available": False
+        })
+
+    try:
+        df = analyzer.df
+        summary = analyzer.get_summary()
+
+        total_rows = summary.get('total_rows', 0)
+        total_cols = summary.get('total_columns', 0)
+        columns_info = summary.get('column_names', [])
+
+        numeric_stats = summary.get('numeric_stats', {})
+        stats_text = ""
+        for col, stats in numeric_stats.items():
+            stats_text += (
+                f"- {col}: Min={stats['min']:.2f}, Max={stats['max']:.2f}, "
+                f"Mean={stats['mean']:.2f}, Median={stats['median']:.2f}, Std={stats['std']:.2f}\n"
+            )
+
+        # FIXED: compute directly from df instead of trusting summary's dtype
+        # string format, which was silently returning empty categorical_cols.
+        categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+        cat_text = ""
+        for col in categorical_cols[:5]:
+            top_values = df[col].value_counts().head(3)
+            cat_text += f"- {col}: {dict(top_values)}\n"
+
+        # Outlier summary (IQR method) so "Noticeable Patterns" can reference real numbers
+        outlier_text = ""
+        for col in numeric_stats.keys():
+            if col in df.columns:
+                q1 = df[col].quantile(0.25)
+                q3 = df[col].quantile(0.75)
+                iqr = q3 - q1
+                lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+                outlier_count = df[(df[col] < lower) | (df[col] > upper)].shape[0]
+                if outlier_count > 0:
+                    outlier_text += f"- {col}: {outlier_count:,} outliers ({(outlier_count/len(df)*100):.1f}%)\n"
+
+        duplicates = df.duplicated().sum()
+        missing_total = df.isnull().sum().sum()
+        total_cells = len(df) * len(df.columns)
+        quality_score = ((total_cells - missing_total - duplicates) / total_cells) * 100
+
+        prompt = f"""
+You are a senior data analyst. Analyze the following dataset's STATISTICS and provide insights.
+
+DATASET: {total_rows:,} rows, {total_cols} columns
+COLUMNS: {', '.join(columns_info)}
+
+NUMERIC STATISTICS:
+{stats_text if stats_text else 'No numeric columns found.'}
+
+CATEGORICAL TOP VALUES:
+{cat_text if cat_text else 'No categorical columns found.'}
+
+OUTLIERS DETECTED (IQR method):
+{outlier_text if outlier_text else 'No significant outliers detected.'}
+
+DATA QUALITY:
+- Data Quality Score: {quality_score:.1f}%
+- Duplicate Rows: {duplicates:,}
+- Missing Values: {missing_total:,}
+
+IMPORTANT: Do NOT use Markdown formatting (no #, no **, no bullet symbols like • or -). Write plain sentences.
+
+Structure your response in EXACTLY these 5 sections, in this order, using these exact section headings in capital letters:
+
+DATA OVERVIEW:
+[2-3 sentences describing what this dataset is and its scale - rows, columns, numeric vs categorical mix]
+
+DATA STATISTICS:
+[3-4 sentences highlighting the most important numeric ranges, averages, and spreads from the statistics above]
+
+KEY FINDINGS:
+[3-4 sentences on the most important takeaways from the statistics - which columns show the widest spread, most skew, or most concentration]
+
+NOTICEABLE PATTERNS:
+[2-3 sentences on outliers, imbalances in categorical distributions, or unusual statistical patterns you observe]
+
+DATA SUMMARY:
+[2-3 sentences giving a simple, non-technical wrap-up of what the statistics tell us overall]
+"""
+
+        llm_response = call_llm(prompt, max_tokens=1800)
+
+        if llm_response:
+            return JSONResponse({
+                "success": True,
+                "explanation": llm_response,
+                "llm_provider": LLM_PROVIDER
+            })
+        else:
+            return JSONResponse({
+                "success": False,
+                "explanation": "Failed to generate insights. Please check your DeepSeek API key.",
+                "llm_available": False
+            })
+
     except Exception as e:
         return JSONResponse({
             "success": False,

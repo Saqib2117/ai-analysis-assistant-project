@@ -13,14 +13,45 @@ class DataAnalyzer:
     
     def __init__(self):
         self.df = None
+        self.original_df = None
         self.summary = None
         self.is_loaded = False
+        self.is_cleaned = False
     
     def load_data(self, df):
+        """Load a fresh dataset (e.g. on new file upload). Resets any
+        previously active cleaned state, since this is a brand new dataset."""
         self.df = df
+        self.original_df = df.copy()
         self.summary = get_dataset_summary(df)
         self.is_loaded = True
+        self.is_cleaned = False
         return True
+
+    def set_active_data(self, df):
+        """Make the given (cleaned) dataframe the ACTIVE dataset for all
+        analysis (Q&A, AI Explain, Insights, Charts) without touching
+        original_df, so it can still be reverted to later.
+
+        ADDED: previously cleaning only updated the frontend's local
+        session-state dataframe and was never sent back to the backend
+        (except as a one-off file upload for PDF export), so Q&A/AI
+        Explain/Insights always answered from the original uncleaned data
+        even after the user cleaned it.
+        """
+        self.df = df
+        self.summary = get_dataset_summary(df)
+        self.is_cleaned = True
+        return True
+
+    def reset_to_original(self):
+        """Revert the active dataset back to the originally uploaded data."""
+        if self.original_df is not None:
+            self.df = self.original_df.copy()
+            self.summary = get_dataset_summary(self.df)
+            self.is_cleaned = False
+            return True
+        return False
     
     def get_summary(self):
         if not self.is_loaded:
@@ -56,25 +87,34 @@ class DataAnalyzer:
         tables) are removed in favor of clean plain text.
         """
 
-        # If result is a Series (like groupby result) - DETAILED ANSWER (light markdown for readability)
+        # If result is a boolean - PLAIN ANSWER (checked before int/float
+        # below, since bool is a subclass of int in Python and would
+        # otherwise silently print 1/0 instead of a readable Yes/No)
+        if isinstance(result, (bool, np.bool_)):
+            metric = label or question.replace("?", "").strip()
+            return f"The {metric} in the dataset is: {'Yes' if result else 'No'}"
+
+        # If result is a Series (like groupby result) - DETAILED ANSWER
+        # Plain text only — no markdown (#, **) and no emoji, since the
+        # frontend renders raw text and these symbols show up literally.
         if isinstance(result, pd.Series):
             sorted_result = result.sort_values(ascending=False)
 
             heading = label or question.replace("?", "").strip()
-            formatted = f"**{heading.capitalize()}:**\n\n"
+            formatted = f"{heading.capitalize()}:\n\n"
 
             for idx, val in sorted_result.items():
                 if isinstance(val, (int, float, np.integer, np.floating)):
-                    formatted += f"- **{idx}**: {val:,.2f}\n"
+                    formatted += f"{idx}: {val:,.2f}\n"
                 else:
-                    formatted += f"- **{idx}**: {val}\n"
+                    formatted += f"{idx}: {val}\n"
 
             if len(sorted_result) > 0:
                 max_val = sorted_result.max()
                 max_idx = sorted_result.idxmax()
                 min_val = sorted_result.min()
                 min_idx = sorted_result.idxmin()
-                formatted += f"\nHighest: **{max_idx}** ({max_val:,.2f}). Lowest: **{min_idx}** ({min_val:,.2f})."
+                formatted += f"\nHighest: {max_idx} ({max_val:,.2f})\nLowest: {min_idx} ({min_val:,.2f})"
 
             return formatted.strip()
 
@@ -200,6 +240,8 @@ CODE:
 result = None
 3. Otherwise, write simple pandas code using ONLY the given 'df' (groupby, mean, max, min, sum, count, value_counts, etc.) that correctly answers the question, and store the final answer in a variable called 'result'.
 4. Also provide a short RESULT_LABEL describing exactly what statistic 'result' represents, in plain lowercase words including the real column name(s), e.g. "average age", "maximum hours-per-week", "count of records where income is >50K", "average hours-per-week by workclass".
+5. IMPORTANT — the RESULT_LABEL must match what 'result' actually contains. If 'result' is just a category name (e.g. from idxmax()), do not label it as a "percentage" or a number — label it as e.g. "education level with the highest percentage of high earners".
+6. For "which category has the highest/lowest X" questions: do NOT return just the bare category name. Compute the full grouped statistic first, find the top category AND its value, and store 'result' as a descriptive string combining both, e.g. result = f"{{top_category}} ({{top_value:.2f}}%)". This way the answer always includes the actual number, not just a name.
 
 Respond in EXACTLY this format, nothing else, no markdown, no explanation:
 RESULT_LABEL: <short description of the statistic>
@@ -230,6 +272,14 @@ EXAMPLE 5 — Question: "What is the sales in the dataset?" (when 'sales' is not
 RESULT_LABEL: COLUMN_NOT_FOUND
 CODE:
 result = None
+
+EXAMPLE 6 — Question: "Which education level has the highest percentage of people earning more than 50K?"
+RESULT_LABEL: education level with the highest percentage earning >50K
+CODE:
+pct_by_group = df.groupby('education')['income'].apply(lambda x: (x == '>50K').mean() * 100)
+top_category = pct_by_group.idxmax()
+top_value = pct_by_group.max()
+result = f"{{top_category}} ({{top_value:.2f}}% earn >50K)"
 """
 
             llm_response = llm_function(prompt)
@@ -314,10 +364,28 @@ result = None
             "method": "column_not_found"
         }
 
+    def _pick_icon(self, label):
+        """Pick a relevant emoji for a result heading, based on keywords."""
+        label_lower = label.lower()
+        icon_map = [
+            (["age"], "🎂"),
+            (["hour"], "⏰"),
+            (["gain", "loss", "income", "capital"], "💰"),
+            (["education"], "🎓"),
+            (["occupation", "workclass", "job"], "💼"),
+            (["gender", "race", "marital", "relationship"], "👥"),
+            (["country"], "🌍"),
+            (["percentage", "percent", "%"], "📊"),
+        ]
+        for keywords, icon in icon_map:
+            if any(k in label_lower for k in keywords):
+                return icon
+        return "📊"
+
     def _generate_detail(self, question, formatted_answer, llm_function):
         """Generate a short, detailed explanation for complex (grouped/
-        multi-value) results. Light markdown (bold on key terms/numbers) is
-        allowed here for readability; no headers (#) or bullet-heavy walls of text."""
+        multi-value) results. Markdown (bold) and tasteful emoji are allowed
+        here since the frontend renders markdown correctly."""
         try:
             detail_prompt = f"""
 The user asked: "{question}"
@@ -326,14 +394,14 @@ Here is the computed result:
 {formatted_answer}
 
 Write a short, detailed explanation (2-4 sentences) of what this result shows and the key insight or pattern in it.
-You may bold key terms, category names, or numbers using **double asterisks** for readability.
-Do not use headers (#), bullet points, or emoji. Write as flowing prose, not a list.
+Bold key terms, category names, or numbers using **double asterisks** for readability.
+You may use 1-2 tasteful, relevant emoji if they genuinely fit the content — don't force them in.
+Do not use headers (#) or bullet points. Write as flowing prose, not a list.
 """
             detail = llm_function(detail_prompt)
             if detail:
-                # Strip only headers/bullets/emoji; keep ** bold markers intact
                 text = detail.strip()
-                for symbol in ["##", "#", "•", "📊", "💡", "✅", "⚠️", "■"]:
+                for symbol in ["##", "#"]:
                     text = text.replace(symbol, "")
                 lines = [line.lstrip("- ").rstrip() if line.strip().startswith("- ") else line for line in text.split("\n")]
                 return "\n".join(lines).strip()

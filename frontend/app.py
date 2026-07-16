@@ -391,7 +391,7 @@ st.markdown("""
 # SESSION STATE
 # ================================================================
 
-BASE_URL = "https://saqib21-fastapi-backend.hf.space"
+BASE_URL = "http://127.0.0.1:8000"
 
 if "api_url" not in st.session_state:
     st.session_state.api_url = BASE_URL
@@ -419,6 +419,8 @@ if 'cleaning_applied' not in st.session_state:
     st.session_state.cleaning_applied = False
 if 'cleaning_message' not in st.session_state:
     st.session_state.cleaning_message = ""
+if 'cleaning_steps_applied' not in st.session_state:
+    st.session_state.cleaning_steps_applied = []
 
 # ================================================================
 # HELPER FUNCTIONS - FIXED TABLE FORMATTING
@@ -1542,8 +1544,13 @@ else:
             
             # Get current dataframe (original or cleaned)
             try:
-                # Always fetch from backend for original data
-                response = requests.get(f"{st.session_state.api_url}/full-dataset")
+                # FIXED: use /original-dataset instead of /full-dataset here,
+                # since /full-dataset returns whatever is currently ACTIVE on
+                # the backend (which becomes the cleaned data after cleaning
+                # is applied and synced). Using it for "original_df" made the
+                # before/after comparison compare cleaned data against
+                # itself, hiding real changes like duplicates actually removed.
+                response = requests.get(f"{st.session_state.api_url}/original-dataset")
                 if response.status_code == 200:
                     full_data = response.json()
                     original_df = pd.DataFrame(full_data.get('data', []))
@@ -1693,63 +1700,101 @@ else:
                     # SECTION 5: APPLY CLEANING
                     # ============================================================
                     if apply_cleaning:
-                        try:
+                        if not any([remove_duplicates, remove_empty, trim_whitespace, fill_missing, detect_dates]):
+                            st.warning("⚠️ Please select at least one cleaning option above before clicking Apply Cleaning.")
+                        else:
+                          try:
                             cleaned_df = df.copy()
                             cleaning_steps = []
+                            meaningful_changes = 0
                             
                             # 1. Remove duplicates
                             if remove_duplicates:
                                 before = len(cleaned_df)
                                 cleaned_df = cleaned_df.drop_duplicates()
                                 after = len(cleaned_df)
-                                cleaning_steps.append(f"Removed {before - after} duplicate rows")
+                                removed = before - after
+                                if removed > 0:
+                                    cleaning_steps.append(f"Removed {removed} duplicate rows")
+                                    meaningful_changes += 1
+                                else:
+                                    cleaning_steps.append("No duplicate rows found")
                             
                             # 2. Remove empty records
                             if remove_empty:
                                 before = len(cleaned_df)
                                 cleaned_df = cleaned_df.dropna(how='all')
                                 after = len(cleaned_df)
-                                cleaning_steps.append(f"Removed {before - after} empty rows")
+                                removed = before - after
+                                if removed > 0:
+                                    cleaning_steps.append(f"Removed {removed} empty rows")
+                                    meaningful_changes += 1
+                                else:
+                                    cleaning_steps.append("No empty rows found")
                             
                             # 3. Trim whitespace
                             if trim_whitespace:
+                                # FIXED: astype(str) before stripping converts
+                                # real missing values (None/NaN) into the
+                                # literal text "nan" on many pandas versions,
+                                # silently destroying missing-value tracking
+                                # for that cell. Only strip actual string
+                                # values and leave everything else (including
+                                # real NaN) untouched.
+                                whitespace_changed = False
                                 for col in cleaned_df.select_dtypes(include=['object']).columns:
-                                    cleaned_df[col] = cleaned_df[col].astype(str).str.strip()
-                                cleaning_steps.append("Trimmed whitespace from text columns")
+                                    def _safe_strip(value):
+                                        if isinstance(value, str):
+                                            return value.strip()
+                                        return value
+                                    trimmed_col = cleaned_df[col].apply(_safe_strip)
+                                    if not trimmed_col.equals(cleaned_df[col]):
+                                        whitespace_changed = True
+                                    cleaned_df[col] = trimmed_col
+                                if whitespace_changed:
+                                    cleaning_steps.append("Trimmed whitespace from text columns")
+                                    meaningful_changes += 1
+                                else:
+                                    cleaning_steps.append("No whitespace issues found")
                             
                             # 4. Fill missing values
                             if fill_missing:
-                                if fill_strategy == "Auto":
-                                    for col in cleaned_df.columns:
-                                        if cleaned_df[col].isnull().sum() > 0:
-                                            if pd.api.types.is_numeric_dtype(cleaned_df[col]):
-                                                cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mean())
-                                            else:
-                                                cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mode()[0] if not cleaned_df[col].mode().empty else "Unknown")
-                                    cleaning_steps.append("Filled missing values using Auto strategy")
-                                elif fill_strategy == "Mean":
-                                    for col in cleaned_df.select_dtypes(include=[np.number]).columns:
-                                        cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mean())
-                                    cleaning_steps.append("Filled missing values using Mean strategy")
-                                elif fill_strategy == "Median":
-                                    for col in cleaned_df.select_dtypes(include=[np.number]).columns:
-                                        cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].median())
-                                    cleaning_steps.append("Filled missing values using Median strategy")
-                                elif fill_strategy == "Mode":
-                                    for col in cleaned_df.columns:
-                                        if cleaned_df[col].isnull().sum() > 0:
-                                            mode_val = cleaned_df[col].mode()[0] if not cleaned_df[col].mode().empty else "Unknown"
-                                            cleaned_df[col] = cleaned_df[col].fillna(mode_val)
-                                    cleaning_steps.append("Filled missing values using Mode strategy")
-                                elif fill_strategy == "Forward Fill":
-                                    cleaned_df = cleaned_df.fillna(method='ffill')
-                                    cleaning_steps.append("Filled missing values using Forward Fill strategy")
-                                elif fill_strategy == "Backward Fill":
-                                    cleaned_df = cleaned_df.fillna(method='bfill')
-                                    cleaning_steps.append("Filled missing values using Backward Fill strategy")
-                                elif fill_strategy == "Custom Value":
-                                    cleaned_df = cleaned_df.fillna(custom_value)
-                                    cleaning_steps.append(f"Filled missing values with custom value: {custom_value}")
+                                missing_before = int(cleaned_df.isnull().sum().sum())
+                                if missing_before == 0:
+                                    cleaning_steps.append("No missing values found")
+                                else:
+                                    meaningful_changes += 1
+                                    if fill_strategy == "Auto":
+                                        for col in cleaned_df.columns:
+                                            if cleaned_df[col].isnull().sum() > 0:
+                                                if pd.api.types.is_numeric_dtype(cleaned_df[col]):
+                                                    cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mean())
+                                                else:
+                                                    cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mode()[0] if not cleaned_df[col].mode().empty else "Unknown")
+                                        cleaning_steps.append(f"Filled {missing_before} missing values using Auto strategy")
+                                    elif fill_strategy == "Mean":
+                                        for col in cleaned_df.select_dtypes(include=[np.number]).columns:
+                                            cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mean())
+                                        cleaning_steps.append(f"Filled {missing_before} missing values using Mean strategy")
+                                    elif fill_strategy == "Median":
+                                        for col in cleaned_df.select_dtypes(include=[np.number]).columns:
+                                            cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].median())
+                                        cleaning_steps.append(f"Filled {missing_before} missing values using Median strategy")
+                                    elif fill_strategy == "Mode":
+                                        for col in cleaned_df.columns:
+                                            if cleaned_df[col].isnull().sum() > 0:
+                                                mode_val = cleaned_df[col].mode()[0] if not cleaned_df[col].mode().empty else "Unknown"
+                                                cleaned_df[col] = cleaned_df[col].fillna(mode_val)
+                                        cleaning_steps.append(f"Filled {missing_before} missing values using Mode strategy")
+                                    elif fill_strategy == "Forward Fill":
+                                        cleaned_df = cleaned_df.fillna(method='ffill')
+                                        cleaning_steps.append(f"Filled {missing_before} missing values using Forward Fill strategy")
+                                    elif fill_strategy == "Backward Fill":
+                                        cleaned_df = cleaned_df.fillna(method='bfill')
+                                        cleaning_steps.append(f"Filled {missing_before} missing values using Backward Fill strategy")
+                                    elif fill_strategy == "Custom Value":
+                                        cleaned_df = cleaned_df.fillna(custom_value)
+                                        cleaning_steps.append(f"Filled {missing_before} missing values with custom value: {custom_value}")
                             
                             # 5. Convert date columns
                             if detect_dates:
@@ -1764,26 +1809,58 @@ else:
                                             pass
                                 if date_cols_detected:
                                     cleaning_steps.append(f"Converted {len(date_cols_detected)} columns to date: {', '.join(date_cols_detected)}")
+                                    meaningful_changes += 1
                                 else:
                                     cleaning_steps.append("No date columns detected")
                             
-                            # Store cleaned data
-                            st.session_state.cleaned_df = cleaned_df
-                            st.session_state.cleaning_applied = True
-                            st.session_state.cleaning_message = f"✅ Data cleaned successfully! {len(cleaning_steps)} operations applied."
-                            
-                            # Update summary after cleaning
-                            update_summary_after_cleaning(cleaned_df)
-                            
-                            # Show success message (ONLY ONE)
-                            st.success(st.session_state.cleaning_message)
-                            for step in cleaning_steps:
-                                st.write(f"• {step}")
-                            
-                            # Rerun to refresh the tab
-                            st.rerun()
+                            # ============================================================
+                            # SHOW RESULT BASED ON WHETHER ANYTHING ACTUALLY CHANGED
+                            # ============================================================
+                            if meaningful_changes == 0:
+                                # FIXED: previously this always said "Data cleaned
+                                # successfully" even when 0 operations did anything,
+                                # which was misleading when the dataset was already
+                                # clean. Now it clearly tells the user nothing needed
+                                # to change, and does NOT mark the dataset as
+                                # "cleaned" or sync a no-op copy to the backend.
+                                st.info("ℹ️ No changes were needed — your dataset is already clean for the selected options!")
+                                for step in cleaning_steps:
+                                    st.write(f"• {step}")
+                            else:
+                                # Store cleaned data
+                                st.session_state.cleaned_df = cleaned_df
+                                st.session_state.cleaning_applied = True
+                                st.session_state.cleaning_message = f"✅ Data cleaned successfully! {meaningful_changes} operation(s) made changes."
+                                st.session_state.cleaning_steps_applied = cleaning_steps
                                 
-                        except Exception as e:
+                                # Update summary after cleaning
+                                update_summary_after_cleaning(cleaned_df)
+                                
+                                # FIXED: push the cleaned data to the backend so
+                                # Q&A, AI Explain, and Statistics & Insights all
+                                # answer from the cleaned dataset too, not just
+                                # the PDF export. Without this, asking "how many
+                                # records" after cleaning would still return the
+                                # original (pre-cleaning) row count.
+                                try:
+                                    csv_bytes = cleaned_df.to_csv(index=False).encode('utf-8')
+                                    requests.post(
+                                        f"{st.session_state.api_url}/apply-cleaned-data",
+                                        files={'file': ('cleaned_data.csv', csv_bytes, 'text/csv')},
+                                        timeout=30
+                                    )
+                                except Exception as sync_err:
+                                    st.warning(f"⚠️ Cleaned data saved locally, but couldn't sync to backend Q&A/Insights: {sync_err}")
+                                
+                                # Show success message (ONLY ONE)
+                                st.success(st.session_state.cleaning_message)
+                                for step in cleaning_steps:
+                                    st.write(f"• {step}")
+                                
+                                # Rerun to refresh the tab
+                                st.rerun()
+                                
+                          except Exception as e:
                             st.error(f"❌ Error during cleaning: {str(e)}")
                     
                     # ============================================================
@@ -1793,10 +1870,14 @@ else:
                         st.session_state.cleaned_df = None
                         st.session_state.cleaning_applied = False
                         st.session_state.cleaning_message = "🔄 Dataset reset to original"
+                        st.session_state.cleaning_steps_applied = []
                         
-                        # Reset summary to original
+                        # FIXED: tell the backend to revert its active dataset
+                        # too, so Q&A/AI Explain/Insights go back to reporting
+                        # on the original row count/values, matching the
+                        # frontend's reset.
                         try:
-                            response_summary = requests.get(f"{st.session_state.api_url}/summary")
+                            response_summary = requests.post(f"{st.session_state.api_url}/reset-to-original")
                             if response_summary.status_code == 200:
                                 data = response_summary.json()
                                 st.session_state.summary = data.get('summary')
@@ -1822,8 +1903,19 @@ else:
                         
                         # Show difference
                         diff = len(original_df) - len(st.session_state.cleaned_df)
+                        steps_applied = st.session_state.get('cleaning_steps_applied', [])
+
                         if diff > 0:
                             st.success(f"✅ Removed {diff} rows through cleaning")
+                        elif steps_applied:
+                            # FIXED: previously this said "No rows removed
+                            # during cleaning" any time row count matched,
+                            # even when fill-missing or trim-whitespace had
+                            # made real changes that don't affect row count -
+                            # making genuine cleaning look like a no-op.
+                            st.success("✅ No rows were removed, but other changes were applied:")
+                            for step in steps_applied:
+                                st.write(f"• {step}")
                         else:
                             st.info("ℹ️ No rows removed during cleaning")
                     else:
@@ -2018,14 +2110,15 @@ else:
                 if st.button("📊 Generate Insights from Data", use_container_width=True):
                     with st.spinner("🤖 AI is analyzing your data..."):
                         try:
-                            response = requests.post(f"{st.session_state.api_url}/explain-data")
+                            response = requests.post(f"{st.session_state.api_url}/generate-insights")
                             if response.status_code == 200:
                                 result = response.json()
                                 if result.get('success'):
+                                    formatted_insights = clean_markdown(result.get('explanation', 'No insights generated'))
                                     st.markdown(f"""
                                     <div class="ai-box">
                                         <h4>📊 Data Insights</h4>
-                                        <p style="font-size: 1.05rem; line-height: 1.8;">{result.get('explanation', 'No insights generated')}</p>
+                                        <p style="font-size: 1.05rem; line-height: 1.8;">{formatted_insights}</p>
                                         <p style="font-size: 0.85rem; margin-top: 0.5rem; opacity: 0.8;">
                                             Powered by {result.get('llm_provider', 'AI')}
                                         </p>
