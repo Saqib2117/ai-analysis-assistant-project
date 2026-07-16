@@ -391,7 +391,7 @@ st.markdown("""
 # SESSION STATE
 # ================================================================
 
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = "https://saqib21-fastapi-backend.hf.space"
 
 if "api_url" not in st.session_state:
     st.session_state.api_url = BASE_URL
