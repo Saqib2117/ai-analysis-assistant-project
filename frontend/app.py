@@ -1188,7 +1188,7 @@ else:
                     # ============================================================
                     
                     if st.session_state.chart_path:
-                        st.image(st.session_state.chart_path, width="stretch")
+                        st.image(st.session_state.chart_path, use_container_width=True)
                         
                         col1, col2 = st.columns(2)
                         
@@ -1835,7 +1835,7 @@ else:
                 st.error(f"Error loading data: {str(e)}")
 
     # ================================================================
-    # TAB 8: Statistics & Insights
+    # TAB 8: Statistics & Insights - FIXED
     # ================================================================
 
     with tab8:
@@ -1866,7 +1866,8 @@ else:
                             describe_df.loc[col, 'unique'] = df[col].nunique()
                             describe_df.loc[col, 'top'] = df[col].mode()[0] if not df[col].mode().empty else ''
                             describe_df.loc[col, 'freq'] = df[col].value_counts().iloc[0] if len(df[col].value_counts()) > 0 else 0
-                    st.dataframe(describe_df, width="stretch")
+                    # ✅ FIXED: Changed width="stretch" to use_container_width=True
+                    st.dataframe(describe_df, use_container_width=True)
                 
                 st.divider()
                 
@@ -1896,7 +1897,7 @@ else:
                         }
                         numeric_stats.append(stats)
                     stats_df = pd.DataFrame(numeric_stats)
-                    st.dataframe(stats_df.round(2), width="stretch")
+                    st.dataframe(stats_df.round(2), use_container_width=True)
                 else:
                     st.info("No numeric columns found in the dataset.")
                 
@@ -1919,7 +1920,7 @@ else:
                                 'Count': value_counts.values,
                                 'Percentage': (value_counts.values / total * 100).round(2)
                             })
-                            st.dataframe(cat_df.head(10), width="stretch")
+                            st.dataframe(cat_df.head(10), use_container_width=True)
                             st.write(f"**Total categories:** {len(value_counts)}")
                             st.write(f"**Most common:** '{value_counts.index[0]}' ({value_counts.iloc[0]} occurrences, {(value_counts.iloc[0]/total*100):.1f}%)")
                     
@@ -1967,7 +1968,7 @@ else:
                             }
                     
                     outlier_df = pd.DataFrame(outlier_results)
-                    st.dataframe(outlier_df.round(2), width="stretch")
+                    st.dataframe(outlier_df.round(2), use_container_width=True)
                     
                     columns_with_outliers = outlier_df[outlier_df['Outliers Count'] > 0]
                     
@@ -1997,7 +1998,7 @@ else:
                                         'Status': ['⚠️ Outlier'] * len(values[:10])
                                     })
                                     st.write(f"**First 10 outlier values in `{col}`:**")
-                                    st.dataframe(outlier_vals_df, width="stretch", hide_index=True)
+                                    st.dataframe(outlier_vals_df, use_container_width=True, hide_index=True)
                                     if len(values) > 10:
                                         st.write(f"... and {len(values) - 10} more outliers")
                                     st.write(f"**Range of outliers:** {min(values):.2f} to {max(values):.2f}")
