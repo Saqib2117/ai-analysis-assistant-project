@@ -21,6 +21,8 @@ import seaborn as sns
 from datetime import datetime
 import json
 import requests
+import re
+import html as html_module
 from dotenv import load_dotenv
 from analysis import DataAnalyzer
 from visualization import ChartGenerator
@@ -31,6 +33,26 @@ load_dotenv()
 # ================================================================
 # JSON SERIALIZATION HELPER
 # ================================================================
+
+def markdown_to_reportlab(text):
+    """Convert light markdown from LLM output into ReportLab-safe markup.
+
+    ADDED: ReportLab's Paragraph does NOT understand markdown syntax like
+    **bold** - it only understands its own tags such as <b>. Without this,
+    any **column name** the LLM bolds shows up as literal asterisks in the
+    PDF. This also escapes XML special characters (&, <, >) first, since
+    Paragraph parses its input as mini-XML - without escaping, any AI text
+    containing a literal "<" or "&" (e.g. "score < 50") would raise an XML
+    parse error and crash PDF generation entirely, regardless of dataset.
+    """
+    if not text:
+        return ""
+    # Escape XML special characters first so our own <b> tags added below
+    # are the only real markup ReportLab sees.
+    text = html_module.escape(text)
+    # Convert **bold** into ReportLab's <b>...</b>
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    return text
 
 def convert_to_serializable(obj):
     """Convert numpy/pandas types to Python native types for JSON serialization"""
@@ -821,6 +843,17 @@ KEY STATISTICS:
     # ============================================================
     elif chart_type == "Scatter":
         if x_col and y_col:
+            # FIXED: previously assumed both axes were always numeric and
+            # unconditionally called .min()/.max()/.mean() formatted with
+            # :.2f. If a user picks a categorical column for an axis (the
+            # frontend allows any column, not just numeric, for Scatter's
+            # X-axis), .min() on a string column returns a string, and
+            # formatting a string with :.2f crashes with "Unknown format
+            # code 'f' for object of type 'str'". Now each axis is handled
+            # according to its actual dtype.
+            x_is_numeric = x_col in numeric_cols
+            y_is_numeric = y_col in numeric_cols
+
             chart_context = f"""
 CHART TYPE: Scatter Plot
 X-AXIS: {x_col}
@@ -828,9 +861,18 @@ Y-AXIS: {y_col}
 TOTAL POINTS: {len(df):,}
 
 STATISTICS:
-- {x_col}: Min={df[x_col].min():.2f}, Max={df[x_col].max():.2f}, Mean={df[x_col].mean():.2f}
-- {y_col}: Min={df[y_col].min():.2f}, Max={df[y_col].max():.2f}, Mean={df[y_col].mean():.2f}
 """
+            if x_is_numeric:
+                chart_context += f"- {x_col}: Min={df[x_col].min():.2f}, Max={df[x_col].max():.2f}, Mean={df[x_col].mean():.2f}\n"
+            else:
+                top_x = df[x_col].value_counts().head(5)
+                chart_context += f"- {x_col} (categorical, {df[x_col].nunique()} unique values): {dict(top_x)}\n"
+
+            if y_is_numeric:
+                chart_context += f"- {y_col}: Min={df[y_col].min():.2f}, Max={df[y_col].max():.2f}, Mean={df[y_col].mean():.2f}\n"
+            else:
+                top_y = df[y_col].value_counts().head(5)
+                chart_context += f"- {y_col} (categorical, {df[y_col].nunique()} unique values): {dict(top_y)}\n"
         elif len(numeric_cols) >= 2:
             col1 = numeric_cols[0]
             col2 = numeric_cols[1]
@@ -930,11 +972,52 @@ KEY STATISTICS:
     # HEATMAP
     # ============================================================
     elif chart_type == "Heatmap":
-        chart_context = f"""
+        # FIXED: previously this only sent column names and row count, with
+        # NO actual correlation values - so the AI had nothing real to
+        # analyze and would guess/hallucinate correlation strength based on
+        # general knowledge (e.g. assuming age and education are usually
+        # correlated) instead of this dataset's actual numbers. Now it
+        # computes the real correlation matrix and includes the strongest
+        # positive/negative pairs so the explanation is grounded in fact.
+        if len(numeric_cols) >= 2:
+            corr_matrix = df[numeric_cols].corr()
+            # Extract unique pairs (excluding self-correlation on the diagonal)
+            pairs = []
+            for i, col_a in enumerate(numeric_cols):
+                for col_b in numeric_cols[i+1:]:
+                    pairs.append((col_a, col_b, corr_matrix.loc[col_a, col_b]))
+            pairs_sorted_desc = sorted(pairs, key=lambda p: p[2], reverse=True)
+            pairs_sorted_asc = sorted(pairs, key=lambda p: p[2])
+
+            top_positive = pairs_sorted_desc[:5]
+            top_negative = pairs_sorted_asc[:5]
+
+            included_cols = numeric_cols[:10]
+            chart_context = f"""
 CHART TYPE: Heatmap
-NUMERIC COLUMNS: {', '.join(numeric_cols[:10])}
+NUMERIC COLUMNS ({len(included_cols)} total): {', '.join(included_cols)}
 TOTAL RECORDS: {len(df):,}
+
+STRONGEST POSITIVE CORRELATIONS (actual computed values):
 """
+            for col_a, col_b, val in top_positive:
+                chart_context += f"- {col_a} & {col_b}: {val:.2f}\n"
+
+            chart_context += "\nSTRONGEST NEGATIVE CORRELATIONS (actual computed values):\n"
+            for col_a, col_b, val in top_negative:
+                chart_context += f"- {col_a} & {col_b}: {val:.2f}\n"
+
+            strongest_overall = max(pairs, key=lambda p: abs(p[2]))
+            chart_context += (
+                f"\nThe strongest correlation in magnitude overall is between "
+                f"'{strongest_overall[0]}' and '{strongest_overall[1]}' at {strongest_overall[2]:.2f}. "
+                f"IMPORTANT: There are exactly {len(included_cols)} numeric columns listed above - "
+                f"state this count accurately if mentioning how many variables are in the heatmap. "
+                f"Only describe correlations using these exact computed values above - "
+                f"do not guess or assume typical real-world relationships between variables."
+            )
+        else:
+            chart_context = "Not enough numeric columns available to compute a correlation heatmap."
 
     # ============================================================
     # AUTO (Default)
@@ -1031,13 +1114,14 @@ You are a data analysis expert. Analyze this chart and explain what it shows.
 
 {chart_context}
 
-Please provide:
-1. What this chart shows in simple terms (1-2 sentences)
-2. The most prominent observation from this chart (1 sentence)
-3. One key insight from this chart (1 sentence)
+Write a short, natural explanation of this chart in exactly 3 sentences, as flowing prose (not a numbered list, not bullet points):
+- Sentence 1: what this chart shows in simple terms
+- Sentence 2: the most prominent observation from this chart
+- Sentence 3: one key insight from this chart
 
 IMPORTANT: Use the exact column names: {x_col if x_col else 'N/A'}
-ONLY talk about the data in this chart. Keep it short and focused.
+CRITICAL - NUMERIC ACCURACY: Any number you state (percentages, counts, correlation values, statistics) MUST be copied EXACTLY from the data provided above. Do not estimate, round differently, average, or approximate these figures - use the precise values as given, character for character.
+ONLY talk about the data in this chart. Keep it short, focused, and easy to read in one breath - just 3 plain sentences back to back, no numbering, no line breaks between them.
 """
         
         llm_response = call_llm(prompt)
@@ -1772,12 +1856,12 @@ async def export_pdf(
                         continue
                     
                     if line.isupper() and len(line) > 10:
-                        story.append(Paragraph(f"<b>{line}</b>", section_style))
+                        story.append(Paragraph(f"<b>{markdown_to_reportlab(line)}</b>", section_style))
                     elif line.startswith('-') or line.startswith('•'):
                         clean_line = line.lstrip('-• ').strip()
-                        story.append(Paragraph(f"• {clean_line}", bullet_style))
+                        story.append(Paragraph(f"• {markdown_to_reportlab(clean_line)}", bullet_style))
                     else:
-                        story.append(Paragraph(line, para_style))
+                        story.append(Paragraph(markdown_to_reportlab(line), para_style))
                 
                 story.append(Spacer(1, 10))
             else:
@@ -1831,7 +1915,8 @@ async def export_pdf(
                 
                 chart_exp = call_llm(chart_prompt)
                 if chart_exp:
-                    story.append(Paragraph(f"<b>Chart Analysis:</b> {chart_exp}", chart_exp_style))
+                    formatted_chart_exp = markdown_to_reportlab(chart_exp) if chart_exp else chart_exp
+                    story.append(Paragraph(f"<b>Chart Analysis:</b> {formatted_chart_exp}", chart_exp_style))
                 else:
                     story.append(Paragraph("Chart analysis not available.", chart_exp_style))
                     
