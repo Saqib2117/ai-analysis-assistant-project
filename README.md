@@ -68,11 +68,7 @@ The **AI Data Analysis Assistant** is a full-stack web application that allows u
 ## 🌐 Live Demo
 
 ### Backend API (Deployed on Huggingface)
-<<<<<<< HEAD
  - Backend Deployed on Huggingface, here is the deployed URL: https://saqib21-fastapi-backend.hf.space 
-=======
- - Backend Deployed on Huggingfsce, here is the deployed URL: https://saqib21-fastapi-backend.hf.space 
->>>>>>> c6c2c17a57616ab26c49cb975c5e6688d26172cf
 
  ### Frontend (Deployed on Streamlit)
  - Frontend of this project is deployed on streamlit, here is the deployed url: https://ai-analysis-assistant-project.streamlit.app/
